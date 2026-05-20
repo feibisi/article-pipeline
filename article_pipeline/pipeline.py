@@ -2,12 +2,37 @@
 import os
 import json
 import yaml
+from datetime import datetime, timezone
+from pathlib import Path
 from article_pipeline.db import TaskDB
 from article_pipeline.research import gather_research, build_research_note
 from article_pipeline.outline import generate_outline, format_outline_for_review
 from article_pipeline.writer import write_article, write_article_claude
 from article_pipeline.review import run_self_review
 from article_pipeline.publish import publish_to_wp
+
+RUNS_DIR = Path.home() / "workspaces" / "article-pipeline" / "runs"
+
+
+def _write_run(task_id: str, workspace: str, status: str,
+               outputs: list[dict] | None = None,
+               issues: list[dict] | None = None,
+               next_step: str = ""):
+    """Write a standardized run report per TASKS.md protocol."""
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).isoformat()
+    run = {
+        "task_id": task_id,
+        "workspace": workspace,
+        "status": status,
+        "started_at": now,
+        "finished_at": now,
+        "outputs": outputs or [],
+        "issues": issues or [],
+        "next": next_step,
+    }
+    fname = RUNS_DIR / f"{task_id}.json"
+    fname.write_text(json.dumps(run, ensure_ascii=False, indent=2))
 
 
 def _load_config():
@@ -186,6 +211,10 @@ class Pipeline:
         self.db.update_status(task_id, "reviewing")
         print(f"  [writing] Done — model: {result.get('model', 'unknown')}")
 
+        _write_run(f"write-{task_id}", "article-pipeline", "completed",
+                    outputs=[{"type": "db", "table": "tasks", "field": "article",
+                              "chars": len(result["article"])}],
+                    next_step="review")
         return {"task_id": task_id, "stage": "writing"}
 
     def process_review(self, task_id: int) -> dict:
@@ -209,6 +238,12 @@ class Pipeline:
 
         print(f"  [review] {status} — AI score: "
               f"{results.get('ai_check', {}).get('score', '?')}")
+
+        _write_run(f"review-{task_id}", "article-pipeline",
+                    "completed" if results.get("overall_pass") else "partial",
+                    outputs=[{"type": "db", "table": "review_log",
+                              "score": results.get("overall_score", 0)}],
+                    next_step="human_review" if results.get("overall_pass") else "human_review_or_revise")
         return results
 
     def show_review_queue(self):
