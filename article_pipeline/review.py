@@ -135,6 +135,8 @@ CORE_PATTERNS = [
     (r"(?:光明的|美好的)(?:未来|前景)", "hz_bright_future"),
     (r"追求卓越的旅程|迈出了.{0,6}(?:重要|坚实|关键)(?:的一步|步伐)", "hz_positive_conclusion"),
     (r"不断演变的(?:格局|领域|生态)", "hz_evolving_landscape"),
+    # Pattern 25: forced-colloquial — AI pretending to be casual
+    (r"不铺垫了|说白了|死胡同|不废话|讲真|不绕弯子|直接告诉你", "hz_forced_casual"),
 ]
 
 STRUCTURAL_PATTERNS = [
@@ -160,7 +162,7 @@ HEAVY_TAGS = {
     "hz_promo_hyper", "hz_cliche_challenges", "hz_cliche_despite",
     "hz_chatbot_close", "hz_chatbot_cutoff", "hz_chatbot_disclaimer",
     "hz_bright_future", "hz_positive_conclusion", "hz_evolving_landscape",
-    "hz_copula_avoid",
+    "hz_copula_avoid", "hz_forced_casual",
 }
 
 FILLER_TAGS = {
