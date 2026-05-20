@@ -42,77 +42,49 @@ WP_GLOSSARY = """WordPress 中文术语规范：
 TODAY = date.today().isoformat()  # e.g. 2026-05-20
 CURRENT_YEAR = str(date.today().year)
 
-WRITER_SYSTEM_PROMPT = f"""你是一位面向中文 WordPress 开发者的技术编辑，为 wptea.com 撰写原创技术文章。
+WRITER_SYSTEM_PROMPT = f"""你是面向中文 WordPress 开发者的技术编辑，为 wptea.com 撰写原创文章。
+当前日期: {TODAY}。所有时间引用、版本号、数据必须基于 {CURRENT_YEAR} 年视角。
 
-当前日期: {TODAY}。所有时间引用、版本号、数据对比都必须基于 {CURRENT_YEAR} 年的视角。
+## 写作范本
+你将收到一组"写作范本"——人类编辑从书籍中提取的观点。它们是你的风格老师。
+1. 先读范本，感受节奏：简洁、有判断、一句话讲清一个观点。
+2. 用范本的语感写文章。范本没有废话，你也不能有。
+3. 范本是你最好的"怎么写"指南。风格规则由范本示范，不由文字规定。
 
-## 术语强制规范（违反直接判定不合格）
-以下 WordPress 术语必须使用规定的中文译名，不得使用英文原文，不得自行简化：
-- Block → 区块（不是"块"）。Block Theme → 区块主题（不是"块主题"）。Block Editor → 区块编辑器（不是"块编辑器"）
-- 以 Block 为词根的复合词全部用"区块"：区块模式、区块模板、可复用区块、导航区块
-- Widget → 小工具 | Sidebar → 边栏 | Full Site Editing / FSE → 全站编辑
-- Template → 模板 | Template Part → 模板部件 | Pattern → 区块模式
-- Hook → 钩子 | Action → 动作 | Filter → 过滤器 | Shortcode → 短代码
-- Permalink → 固定链接 | Slug → 缩略名 | Transient → 临时缓存
-- Custom Post Type → 自定义文章类型 | Taxonomy → 分类法
-- Multisite → 多站点 | Child Theme → 子主题
-- Plugin → 插件 | Theme → 主题（这两个可以用中文）
+## 来源规则
+唯一信息来源是"参考素材"。编造数据、URL、书名、人名、公司名是写作事故。
+- 所有数字、百分比、时间、版本号必须来自参考素材
+- 不引用裸域名（"根据 xxx.com"）。引用文章标题或机构名称
+- 参考素材没有的，跳过不写。禁止元评论（"素材没有数据""本文无法给出量化对比"）
 
-## 写作范本（优先级最高）
-如果参考素材中包含"写作范本"部分，这些是人类编辑从真实书籍中提取的观点。你必须：
-1. 模仿范本的写法——一句话讲清一个观点，不绕弯子
-2. 模仿范本的节奏——短句、直接、有判断力
-3. 范本没有"首先其次""值得注意的是"这类废话，你的文章里也不能有
-4. 范本的语言就是最好的"去 AI 味"指南。写之前先读三遍范本，内化其语感。
-
-## 写作风格
-- 用中文技术社区的自然语感写作，不是从英文翻译过来的
-- 句子有长有短，节奏自然。一个短句一行也可以
-- 避免翻译腔和 AI 味词汇。以下词/句式一概不用：
-  总结类: 总而言之、综上所述、总的来说、总体而言、归根结底、简而言之、从总体上看
-  填充类: 值得注意的是、不可忽视的是、必须指出的是、重要的是、可以认为、这意味着、换句话说、具体来说、事实上
-  连接词滥用: 此外、另一方面、因而、从而、基于此、鉴于、尤其是、特别是
-  修饰词过度: 一般来说、通常、显然、综合来看、作为结果
-  翻译腔: 毋庸置疑、众所周知、不可否认
-  句式: "不是...而是..."（英文 not X but Y 直译）、"在当今...时代"、"随着...的发展"、"不仅...而且..."
-- 禁止 AI 式自创复合词和伪深度短语：
-  自创词："模板海""插件海""功能海""数据海"→ 正常人写"丰富的模板""大量插件"
-  "XX矩阵"（功能矩阵/环境矩阵）→ 除非是数学概念，否则就是 AI 编的
-  "进化之路""必经之路""不二之选"→ AI 伪深度套话，删掉或换成直白表述
-  真实术语不受此限：连接池、进程池、技术债（但不要在没必要的地方堆术语）
-- 不要在文中以裸域名作为信息来源（如"根据 anipage.io 的评测""361sale.com 数据显示"）。域名不是权威来源，这是明显的 AI 编造痕迹。如果确实需要引用，引用具体的文章标题或机构名称，且必须来自参考素材。
-- 段落 3-5 句，不做 15 句的长段落
-- 像在给同事讲解技术问题，不像写论文
-
-## 来源规则（极其重要）
-你的唯一信息来源是下面提供的"参考素材"。你必须严格遵守：
-1. **所有数据、数字、百分比、时间、版本号必须来自参考素材**，不得编造
-2. **所有 URL、链接必须来自参考素材**，不得虚构网址
-3. **所有书名、作者名、公司名必须来自参考素材**，不得杜撰
-4. **参考素材没有的，跳过不写。不要写一段话解释你为什么跳过——读者不需要知道你的写作过程**
-5. 如果你需要在两段素材之间做逻辑衔接，用"根据现有资料""从已知信息来看"等过渡，不要假装有数据支撑
-6. 不要在文中编造"据XX统计""XX报告显示""XX研究表明"这类引用，除非参考素材里明确有
-7. 禁止元评论：不要说"素材里没有任何数据""没有基准测试我们无法断言""不编造数据就写不出XXX""本文无法给出量化对比"。这类自我解释是写作事故，直接删除对应的段落，换成实际能写的内容
-
-## 术语规范
+## 术语
 {WP_GLOSSARY}
 
-## 结构要求
-- 用 H2/H3 组织文章结构，至少 5 个 H2 段落
-- Markdown 格式，代码块标注语言
-- 文章 2500-4000 字。每个 H2 段落至少 200 字
-
-## 观点要求（极其重要）
-每篇文章必须有一个明确的、可被反驳的判断。你的读者是付费用户，不是来听"双方各有千秋"的。
-- 结论段必须有立场。不能说"取决于你的需求选择合适方案"，要说"如果你在做 X，选 A；如果你在做 Y，B 是错的"
-- 禁止以下废话：取决于需求、各有优劣、选择哪个要看具体情况、两者都很优秀、没有绝对的对错
-- 如果你的结论可以用在任何一篇同类文章里，说明你没给出真正的判断。重写结论
-- 每段 H2 至少包含一个可操作的建议或一个可被反驳的判断"""
+## 输出
+- 2500-4000 字 Markdown，H2/H3 结构，至少 5 个 H2 段落
+- 结论必须有明确立场。禁止"取决于需求""各有优劣""两者都很优秀"
+- 如果结论可以用在任何同类文章里，重写结论"""
 
 
 def _build_writer_prompt(keyword: str, category: str, outline: dict,
-                         research_note: str) -> str:
+                         research_note: str, writing_samples: list[dict] | None = None) -> str:
     """Build the full writing prompt from outline and research."""
+    # Writing samples as few-shot style templates
+    samples_block = ""
+    if writing_samples:
+        sample_texts = []
+        for s in writing_samples[:4]:
+            claim = s.get("claim", "")
+            claim_type = s.get("type", "")
+            quality = s.get("quality", "")
+            if claim:
+                sample_texts.append(f"[{quality}级|{claim_type}] {claim}")
+        if sample_texts:
+            samples_block = ("## 写作范本（读三遍再动笔）\n"
+                             "以下是人类编辑从书籍中提取的观点。每一条都是好文字的范本——简洁、有判断、一句话讲清一个观点。\n"
+                             "你的文章必须匹配这种语感和节奏。不要写成教科书。\n\n"
+                             + "\n\n".join(sample_texts) + "\n\n")
+
     sections_text = ""
     for i, sec in enumerate(outline.get("sections", [])):
         sections_text += f"\n## {sec.get('heading', '')}\n"
@@ -129,7 +101,7 @@ def _build_writer_prompt(keyword: str, category: str, outline: dict,
         source_note += ("\n\n[注意：参考素材较少。请仅基于已有素材写作，"
                         "不要编造数据、URL、书名或统计数字。不确定的地方直接说'目前没有公开数据']")
 
-    return f"""请基于以下参考素材撰写一篇原创技术文章。只使用参考素材中的信息，不要编造任何事实、数据或来源。
+    return f"""{samples_block}请基于以下参考素材撰写一篇原创技术文章。只使用参考素材中的信息，不要编造任何事实、数据或来源。
 
 ## 文章信息
 - 标题: {title}
@@ -147,6 +119,17 @@ def _build_writer_prompt(keyword: str, category: str, outline: dict,
 - 直接输出 Markdown 正文，不要加"好的""以下是文章"等前缀
 - 文中的数据、URL、书名、人名必须能在参考素材中找到对应条目
 - 参考素材没有的信息，宁可跳过也不编造"""
+
+
+def _extract_samples(research_note: str) -> list[dict]:
+    """Extract writing samples from the research note's 写作范本 section."""
+    import re as _re
+    samples = []
+    # Match patterns like: "1. [B级|technique] claim text"
+    pattern = _re.findall(r'\d+\.\s*\[([AB])级\|(\w+)\]\s*(.+?)(?=\n\d+\.\s*\[|$)', research_note, _re.DOTALL)
+    for quality, ctype, claim in pattern:
+        samples.append({"quality": quality, "type": ctype, "claim": claim.strip()})
+    return samples
 
 
 def _call_messages_api(base_url: str, api_key: str, model: str,
@@ -253,7 +236,8 @@ def write_article(keyword: str, category: str, outline: dict,
     if category == "book-knowledge":
         model = ds_config.get("model_deep", "deepseek-v4-pro")
 
-    prompt = _build_writer_prompt(keyword, category, outline, research_note)
+    samples = _extract_samples(research_note)
+    prompt = _build_writer_prompt(keyword, category, outline, research_note, samples)
     result = _call_messages_api(base_url, api_key, model,
                                 WRITER_SYSTEM_PROMPT, prompt,
                                 ds_config.get("max_tokens", 4096))
@@ -287,7 +271,8 @@ def write_article_claude(keyword: str, category: str, outline: dict,
         return {"error": "missing_api_key",
                 "message": "ANTHROPIC_API_KEY env var not set"}
 
-    prompt = _build_writer_prompt(keyword, category, outline, research_note)
+    samples = _extract_samples(research_note)
+    prompt = _build_writer_prompt(keyword, category, outline, research_note, samples)
     return _call_messages_api("https://api.anthropic.com", api_key,
                               "claude-sonnet-4-6",
                               WRITER_SYSTEM_PROMPT, prompt, 4096)
