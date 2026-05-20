@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Revision: {{ task.keyword }}{% endblock %}
+
+{% block content %}
+<h1>Request Revision</h1>
+<p style="color:var(--muted)">{{ task.keyword }} &mdash; {{ task.category }}</p>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin:20px 0">
+  <form method="POST" action="/submit-revision?id={{ task.id }}">
+
+    <fieldset>
+      <legend>Issues</legend>
+      <label><input type="checkbox" name="issue" value="tech_inaccurate"> Technical inaccuracy</label>
+      <label><input type="checkbox" name="issue" value="ai_tone" {% if has_ai_suggestion %}checked{% endif %}> AI tone too strong</label>
+      <label><input type="checkbox" name="issue" value="facts_unverified" {% if has_fact_suggestion %}checked{% endif %}> Unverified facts</label>
+      <label><input type="checkbox" name="issue" value="format_issues"> Format/structure issues</label>
+      <label><input type="checkbox" name="issue" value="too_shallow"> Too shallow</label>
+      <label><input type="checkbox" name="issue" value="wrong_tone"> Wrong brand tone</label>
+      <label><input type="checkbox" name="issue" value="fabrication"> Fabricated content</label>
+    </fieldset>
+
+    <label style="margin-top:16px">Additional notes:</label>
+    <textarea name="notes" rows="4" placeholder="Specific feedback..."></textarea>
+
+    {% if suggestions %}
+    <details style="margin-top:16px">
+      <summary><strong>Auto-detected suggestions ({{ suggestions|length }})</strong></summary>
+      <div style="padding:12px 0">
+        {% for s in suggestions %}
+        <div class="suggestion {{ s.priority }}">
+          <div class="sug-cat">{{ s.category }} [{{ s.priority }}]</div>
+          <div class="sug-issue">{{ s.issue }}</div>
+          <div class="sug-fix">{{ s.fix }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </details>
+    {% endif %}
+
+    <div style="margin-top:20px;display:flex;gap:8px">
+      <button type="submit" class="btn btn-warning">Submit Revision Request</button>
+      <a href="/view?id={{ task.id }}" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

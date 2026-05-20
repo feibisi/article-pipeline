@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<div style="text-align:center;padding:60px 0">
+  <h1>{{ title }}</h1>
+  {% if message %}<p style="color:var(--muted);font-size:16px">{{ message|safe }}</p>{% endif %}
+  {% if detail %}<p style="margin-top:16px">{{ detail }}</p>{% endif %}
+  <div style="margin-top:32px">
+    {% if back_url %}
+    <a href="{{ back_url }}" class="btn btn-secondary">Back</a>
+    {% else %}
+    <a href="/" class="btn btn-secondary">Back to List</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

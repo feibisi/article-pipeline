@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Review Queue{% endblock %}
+
+{% block content %}
+<div class="stats-bar">
+  <div class="stat">
+    <div class="stat-value">{{ tasks|length }}</div>
+    <div class="stat-label">Awaiting Review</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" style="color:var(--success)">{{ pass_count }}</div>
+    <div class="stat-label">Pass</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value" style="color:var(--danger)">{{ fail_count }}</div>
+    <div class="stat-label">Fail</div>
+  </div>
+  <div class="stat">
+    <div class="stat-value">{{ avg_score|round(1) }}</div>
+    <div class="stat-label">Avg Score</div>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <input type="text" id="search" placeholder="Search articles..." oninput="filterTable()">
+  <select id="status-filter" onchange="filterTable()">
+    <option value="all">All</option>
+    <option value="pass">Pass only</option>
+    <option value="fail">Fail only</option>
+  </select>
+</div>
+
+<table class="article-table">
+  <thead>
+    <tr>
+      <th><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
+      <th onclick="sortTable(0)">Title <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(1)">Category <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(2)" data-type="num">Overall <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(3)" data-type="num">AI <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(4)" data-type="num">Fab <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(5)" data-type="num">Semantic <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(6)" data-type="num">Hz <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(7)" data-type="num">GEO <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(8)" data-type="num">Chars <span class="sort-arrow"></span></th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr data-status="{{ 'pass' if item.pass else 'fail' }}"
+        data-title="{{ item.keyword|lower }}"
+        class="article-row">
+      <td><input type="checkbox" class="row-cb" value="{{ item.id }}" onchange="updateBatchBar()"></td>
+      <td class="title-cell">
+        <span class="badge badge-neutral">v{{ item.version }}</span>
+        <a href="/view?id={{ item.id }}">{{ item.keyword }}</a>
+        {% if item.revision_count %}<span class="badge badge-rev">R{{ item.revision_count }}</span>{% endif %}
+      </td>
+      <td>{{ item.category }}</td>
+      <td><span class="score-inline {{ 'good' if item.overall >= 6 else 'mid' if item.overall >= 4 else 'bad' }}">{{ item.overall }}</span></td>
+      <td>
+        <span class="score-inline {{ 'good' if item.ai >= 7 else 'mid' if item.ai >= 5 else 'bad' }}">{{ item.ai }}</span>
+        {% if item.ai_flags %}<span class="badge badge-warn">{{ item.ai_flags }}fl</span>{% endif %}
+      </td>
+      <td><span class="score-inline {{ 'good' if item.fab >= 8 else 'mid' if item.fab >= 5 else 'bad' }}">{{ item.fab }}</span></td>
+      <td>{{ item.sem_verified }}/{{ item.sem_total }}</td>
+      <td>
+        <span class="score-inline {{ 'good' if item.hz >= 40 else 'mid' if item.hz >= 30 else 'bad' }}">{{ item.hz }}/50</span>
+        <span class="badge {{ 'badge-pass' if item.hz >= 40 else 'badge-warn' }}">{{ item.hz_grade }}</span>
+      </td>
+      <td><span class="score-inline {{ 'good' if item.geo >= 75 else 'mid' if item.geo >= 50 else 'bad' }}">{{ item.geo }}</span></td>
+      <td>{{ item.chars }}</td>
+      <td>
+        <form method="POST" action="/approve?id={{ item.id }}" style="display:inline">
+          <button type="submit" class="btn-sm approve" onclick="return confirm('Approve and publish?')">A</button>
+        </form>
+        <a href="/revision?id={{ item.id }}" class="btn-sm revise">R</a>
+        <form method="POST" action="/reject?id={{ item.id }}" style="display:inline">
+          <button type="submit" class="btn-sm reject" onclick="return confirm('Reject this article?')">X</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div id="batch-bar">
+  <span id="batch-count" style="font-weight:600">0 selected</span>
+  <form method="POST" action="/batch-approve" style="display:inline" id="batch-approve-form">
+    <button type="button" onclick="batchApprove()" class="btn btn-primary" style="font-size:13px;padding:6px 16px">Batch Approve</button>
+  </form>
+  <button onclick="clearBatch()" class="btn btn-secondary" style="font-size:13px;padding:6px 16px">Clear</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterTable() {
+  const search = document.getElementById('search').value.toLowerCase();
+  const status = document.getElementById('status-filter').value;
+  document.querySelectorAll('.article-row').forEach(row => {
+    const matchTitle = row.dataset.title.includes(search);
+    const matchStatus = status === 'all' || row.dataset.status === status;
+    row.style.display = (matchTitle && matchStatus) ? '' : 'none';
+  });
+}
+
+let sortCol = -1, sortAsc = true;
+function sortTable(col) {
+  const rows = Array.from(document.querySelectorAll('.article-row'));
+  if (sortCol === col) { sortAsc = !sortAsc; } else { sortCol = col; sortAsc = true; }
+  rows.sort((a, b) => {
+    let va = a.cells[col + 1]?.textContent.trim() || '';
+    let vb = b.cells[col + 1]?.textContent.trim() || '';
+    const num = va.match(/^[\d.]+$/);
+    if (num) { va = parseFloat(va); vb = parseFloat(vb); }
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+  rows.forEach(r => r.parentNode.appendChild(r));
+}
+
+function toggleAll(cb) {
+  document.querySelectorAll('.row-cb').forEach(c => c.checked = cb.checked);
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const checked = document.querySelectorAll('.row-cb:checked');
+  const bar = document.getElementById('batch-bar');
+  document.getElementById('batch-count').textContent = checked.length + ' selected';
+  bar.classList.toggle('visible', checked.length > 0);
+}
+
+function getSelectedIds() {
+  return Array.from(document.querySelectorAll('.row-cb:checked')).map(c => c.value);
+}
+
+function batchApprove() {
+  const ids = getSelectedIds();
+  if (!ids.length) return;
+  if (!confirm('Approve and publish ' + ids.length + ' articles?')) return;
+  const form = document.getElementById('batch-approve-form');
+  // Add hidden inputs for each ID
+  form.querySelectorAll('input[name=ids]').forEach(i => i.remove());
+  ids.forEach(id => {
+    const input = document.createElement('input');
+    input.type = 'hidden'; input.name = 'ids'; input.value = id;
+    form.appendChild(input);
+  });
+  form.submit();
+}
+
+function clearBatch() {
+  document.querySelectorAll('.row-cb').forEach(c => c.checked = false);
+  document.getElementById('select-all').checked = false;
+  updateBatchBar();
+}
+
+// Keyboard navigation
+let selectedRow = -1;
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const rows = Array.from(document.querySelectorAll('.article-row')).filter(r => r.style.display !== 'none');
+  if (e.key === 'j') { selectedRow = Math.min(selectedRow + 1, rows.length - 1); highlightRow(rows); }
+  if (e.key === 'k') { selectedRow = Math.max(selectedRow - 1, 0); highlightRow(rows); }
+  if (e.key === 'Enter' && selectedRow >= 0) {
+    const link = rows[selectedRow]?.querySelector('.title-cell a');
+    if (link) window.location = link.href;
+  }
+});
+
+function highlightRow(rows) {
+  rows.forEach(r => r.style.background = '');
+  if (rows[selectedRow]) {
+    rows[selectedRow].style.background = '#e8e4e0';
+    rows[selectedRow].scrollIntoView({ block: 'nearest' });
+  }
+}
+</script>
+{% endblock %}
