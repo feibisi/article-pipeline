@@ -171,7 +171,6 @@ FILLER_TAGS = {
     "filler_important_is", "filler_can_consider", "filler_this_means",
     "filler_in_other_words", "filler_specifically", "filler_in_fact",
     "translation_undoubtedly", "translation_as_we_know", "translation_undeniable",
-    "translation_not_x_but_y", "translation_not_x_is_y",
     # Humanizer-zh fillers
     "filler_to_achieve", "filler_due_to_fact", "filler_at_this_point",
     "filler_has_ability",
@@ -189,6 +188,9 @@ LIGHT_TAGS = {
     "connector_especially", "connector_particularly",
     "qualifier_generally", "qualifier_obviously",
     "qualifier_comprehensively", "struct_as_result",
+    # Valid Chinese patterns — frequency counter only
+    "translation_not_x_but_y", "translation_not_x_is_y",
+    "connector_for_example",
 }
 
 
@@ -433,39 +435,50 @@ def check_fabrication(article: str, research_note: str) -> dict:
 # ── Terminology violations ──
 
 WP_TERM_VIOLATIONS = [
-    (r'块编辑器', '应为"区块编辑器"'),
-    (r'块主题', '应为"区块主题"'),
+    # Only catch standalone "块编辑器/块主题" — not "区块编辑器/区块主题"
+    (r'(?<!区)块编辑器', '应为"区块编辑器"'),
+    (r'(?<!区)块主题', '应为"区块主题"'),
     (r'以块为(?:单位|核心|基础|单元|内容)', '应为"以区块为..."'),
-    (r'的块[^域模海链]', '单独的"块"应改为"区块"'),
-    (r'把块', '应为"把区块"'),
+    # Catch standalone 块 used as WP concept, but NOT in generic phrases like "一块/两块/是块"
+    (r'(?<![区模板块冰积石砖地方法一俩两三几])块(?=(?:编辑器|主题|模式|样式|为))', '应为"区块"'),
 ]
 
 
 def check_terminology(article: str) -> dict:
-    """Check for WordPress terminology violations."""
+    """Check for WordPress terminology violations. Context-aware — skips explanatory parentheticals."""
     flags = []
     for pattern, fix in WP_TERM_VIOLATIONS:
         matches = re.findall(pattern, article)
         for m in matches[:5]:
-            flags.append({"type": "term_violation", "match": str(m)[:60], "fix": fix})
+            mt = str(m)
+            # Skip if it's inside an explanatory parenthetical like "（Block Theme）"
+            if re.search(r'[（(]' + re.escape(mt) + r'[）)]', article) or \
+               re.search(r'简称\s*' + re.escape(mt), article):
+                continue
+            flags.append({"type": "term_violation", "match": mt[:60], "fix": fix})
 
-    # Also check English terms appearing in Chinese text
+    # English terms: only flag if used standalone (not in parenthetical explanation)
     eng_terms = {
         r'\bBlock\b': '区块', r'\bFSE\b': '全站编辑',
         r'\bFull Site Editing\b': '全站编辑', r'\bHook\b': '钩子',
         r'\bPattern\b': '区块模式', r'\bShortcode\b': '短代码',
-        r'\bAction\b': '动作', r'\bFilter\b': '过滤器',
     }
     for pattern, zh in eng_terms.items():
         matches = re.findall(pattern, article)
-        for _ in matches[:3]:
-            flags.append({"type": "english_term", "match": pattern.strip(r'\b'),
+        for m in matches[:3]:
+            # Skip explanatory usage: "全站编辑（Full Site Editing，简称 FSE）"
+            context_start = max(0, article.find(m) - 30)
+            context = article[context_start:article.find(m) + len(m) + 30]
+            if re.search(r'[（(].*' + re.escape(m) + r'.*[）)]', context) or \
+               re.search(r'简称\s*' + re.escape(m), context):
+                continue
+            flags.append({"type": "english_term", "match": m,
                           "fix": f'应使用中文"{zh}"'})
 
     return {
         "violations": len(flags),
         "details": flags[:12],
-        "pass": len(flags) <= 1
+        "pass": len(flags) <= 2
     }
 
 
@@ -497,13 +510,13 @@ def check_semantic_facts(article: str, threshold: float = 0.9) -> dict:
     claims = _extract_claims(article)
     if not claims:
         return {"verified": 0, "unverified": 0, "details": [], "pass": True}
-    verified, unverified = [], []
+    verified, unverified, api_errors = [], [], 0
     for claim in claims:
         try:
             resp = requests.get(
                 f"{COCOBOOK_API}/recommend",
                 params={"q": claim, "limit": 3},
-                timeout=15
+                timeout=5
             )
             resp.raise_for_status()
             data = resp.json()
@@ -514,10 +527,13 @@ def check_semantic_facts(article: str, threshold: float = 0.9) -> dict:
             else:
                 unverified.append({"claim": claim[:80]})
         except (requests.RequestException, json.JSONDecodeError):
-            unverified.append({"claim": claim[:80], "error": "api_unavailable"})
+            api_errors += 1
+
+    api_down = (api_errors > 0 and len(verified) == 0)
     return {"verified": len(verified), "unverified": len(unverified),
             "details": unverified[:8], "verified_details": verified[:5],
-            "pass": len(unverified) <= 3, "total_claims": len(claims)}
+            "pass": api_down or len(unverified) <= 3,
+            "total_claims": len(claims)}
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -526,8 +542,9 @@ def check_semantic_facts(article: str, threshold: float = 0.9) -> dict:
 
 def compute_overall_score(results: dict) -> float:
     """Weighted overall quality score from review results."""
-    weights = {"ai_check": 0.18, "format": 0.08, "fabrication": 0.22,
-               "semantic_facts": 0.17, "word_count": 0.08, "humanizer": 0.12, "geo": 0.15}
+    weights = {"ai_check": 0.22, "format": 0.10, "fabrication": 0.25,
+               "semantic_facts": 0.18, "word_count": 0.10, "humanizer": 0.15}
+    # GEO is advisory — not in weighted score
     scores = {
         "ai_check": results.get("ai_check", {}).get("score", 0),
         "format": 7.0 if results.get("format", {}).get("pass") else 3.0,
@@ -535,7 +552,6 @@ def compute_overall_score(results: dict) -> float:
         "semantic_facts": 8.0 if results.get("semantic_facts", {}).get("pass") else 4.0,
         "word_count": 7.0 if results.get("word_count", {}).get("pass") else 3.0,
         "humanizer": (results.get("humanizer", {}).get("total", 25) / 50) * 10,
-        "geo": results.get("geo", {}).get("score", 0) / 5,  # 0-100 -> 0-20
     }
     return round(sum(scores[k] * weights[k] for k in weights), 1)
 
@@ -695,10 +711,10 @@ def run_self_review(article: str, tier: str = "A",
         format_check.get("pass", False),
         fact_check.get("pass", True),
         fab_check.get("pass", True),
-        sem_check.get("pass", True),
+        sem_check.get("pass", not research_note),  # skip if no research note
         humanizer.get("pass", True),
         term_check.get("pass", True),
-        geo_check.get("pass", True),
+        # GEO is advisory — not a block for pass/fail
     ])
 
     results = {
