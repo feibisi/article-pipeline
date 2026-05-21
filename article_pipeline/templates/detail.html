@@ -8,25 +8,25 @@
     <strong>{{ task.keyword }}</strong>
     <span class="badge badge-neutral">{{ task.category }}</span>
     {% if review and review.overall_pass %}
-    <span class="badge badge-pass">PASS</span>
+    <span class="badge badge-pass">通过</span>
     {% else %}
-    <span class="badge badge-fail">FAIL</span>
+    <span class="badge badge-fail">未通过</span>
     {% endif %}
     {% if revision_count %}<span class="badge badge-rev">R{{ revision_count }}</span>{% endif %}
   </div>
   <form method="POST" action="/approve?id={{ task.id }}" style="display:inline">
-    <button type="submit" class="btn btn-primary" onclick="return confirm('Approve and publish?')">Approve</button>
+    <button type="submit" class="btn btn-primary" onclick="return confirm('确认发布？')">批准发布</button>
   </form>
-  <a href="/revision?id={{ task.id }}" class="btn btn-warning">Revise</a>
+  <a href="/revision?id={{ task.id }}" class="btn btn-warning">修订</a>
   <form method="POST" action="/reject?id={{ task.id }}" style="display:inline">
-    <button type="submit" class="btn btn-danger" onclick="return confirm('Reject this article?')">Reject</button>
+    <button type="submit" class="btn btn-danger" onclick="return confirm('拒绝 this article?')">拒绝</button>
   </form>
   {% if review and review.suggestions %}
   <form method="POST" action="/auto-revise?id={{ task.id }}" style="display:inline">
-    <button type="submit" class="btn btn-secondary" onclick="return confirm('Auto-revise with suggestions?')">Auto-Revise</button>
+    <button type="submit" class="btn btn-secondary" onclick="return confirm('Auto-revise with suggestions?')">自动修订</button>
   </form>
   {% endif %}
-  <a href="/" class="btn btn-secondary">Back</a>
+  <a href="/" class="btn btn-secondary">返回</a>
 </div>
 
 {% if review %}
@@ -42,25 +42,25 @@
     <div class="score-ring" style="background:conic-gradient(var({% if review.overall_score >= 6 %}--success{% elif review.overall_score >= 4 %}--warning{% else %}--danger{% endif %}) {{ (review.overall_score / 10 * 360)|round }}deg, #e8e4e0 0deg)">
       <span class="value">{{ review.overall_score }}</span>
     </div>
-    <div class="label" style="margin-top:8px">Overall</div>
+    <div class="label" style="margin-top:8px">总分</div>
   </div>
   <div class="score-card">
     <div class="score-ring" style="background:conic-gradient(var({% if ai.score >= 7 %}--success{% elif ai.score >= 5 %}--warning{% else %}--danger{% endif %}) {{ (ai.score / 10 * 360)|round }}deg, #e8e4e0 0deg)">
       <span class="value">{{ ai.score }}</span>
     </div>
-    <div class="label" style="margin-top:8px">AI Detection</div>
+    <div class="label" style="margin-top:8px">AI 检测</div>
   </div>
   <div class="score-card">
     <div class="score-ring" style="background:conic-gradient(var({% if fab.score >= 8 %}--success{% elif fab.score >= 5 %}--warning{% else %}--danger{% endif %}) {{ (fab.score / 10 * 360)|round }}deg, #e8e4e0 0deg)">
       <span class="value">{{ fab.score }}</span>
     </div>
-    <div class="label" style="margin-top:8px">Fabrication</div>
+    <div class="label" style="margin-top:8px">编造检测</div>
   </div>
   <div class="score-card">
     <div class="score-ring" style="background:conic-gradient(var({% if sem.pass %}--success{% else %}--danger{% endif %}) {{ (sem.verified / sem.total_claims * 360)|round if sem.total_claims else 0 }}deg, #e8e4e0 0deg)">
       <span class="value">{{ sem.verified }}/{{ sem.total_claims }}</span>
     </div>
-    <div class="label" style="margin-top:8px">Facts Verified</div>
+    <div class="label" style="margin-top:8px">事实核实</div>
   </div>
   <div class="score-card">
     <div class="score-ring" style="background:conic-gradient(var({% if hz.total >= 40 %}--success{% elif hz.total >= 30 %}--warning{% else %}--danger{% endif %}) {{ (hz.total / 50 * 360)|round }}deg, #e8e4e0 0deg)">
@@ -78,7 +78,7 @@
 </div>
 
 <!-- C. Detail sections (accordion) -->
-<!-- 1. AI Detection -->
+<!-- 1. AI 检测 -->
 <details class="section" open>
   <summary>AI Pattern Detection <span class="badge {{ 'badge-pass' if ai.pass else 'badge-fail' }}">{{ ai.score }}/10</span></summary>
   <div class="section-body">
@@ -119,9 +119,9 @@
   </div>
 </details>
 
-<!-- 3. Fabrication -->
+<!-- 3. 编造检测 -->
 <details class="section">
-  <summary>Fabrication Check <span class="badge {{ 'badge-pass' if fab.pass else 'badge-fail' }}">{{ fab.fabrication_flags }} flags</span></summary>
+  <summary>编造检测 Check <span class="badge {{ 'badge-pass' if fab.pass else 'badge-fail' }}">{{ fab.fabrication_flags }} flags</span></summary>
   <div class="section-body">
     {% if fab.details %}
     {% for d in fab.details %}
@@ -230,7 +230,7 @@
 <!-- D. Version history with score trends -->
 {% if version_scores and version_scores|length > 0 %}
 <details class="section" open>
-  <summary>Version History <span class="badge badge-neutral">v{{ version_scores|length }}</span></summary>
+  <summary>版本历史 <span class="badge badge-neutral">v{{ version_scores|length }}</span></summary>
   <div class="section-body">
     <div style="display:flex;gap:8px;align-items:center;padding:8px 0">
     {% for vs in version_scores %}
@@ -260,7 +260,7 @@
 <!-- E. Review history -->
 {% if feedback_history %}
 <details class="section">
-  <summary>Review History <span class="badge badge-neutral">{{ feedback_history|length }}</span></summary>
+  <summary>审阅历史 <span class="badge badge-neutral">{{ feedback_history|length }}</span></summary>
   <div class="section-body">
     <ul class="timeline">
       {% for h in feedback_history %}
@@ -281,10 +281,10 @@
 </details>
 {% endif %}
 
-<!-- E. Outline & Research Note -->
+<!-- E. 提纲 & 研究笔记 -->
 {% if task.outline %}
 <details class="section">
-  <summary>Outline</summary>
+  <summary>提纲</summary>
   <div class="section-body">
     {% set outline = task.outline_parsed %}
     {% if outline %}
@@ -325,7 +325,7 @@
 
 {% if task.research_note %}
 <details class="section">
-  <summary>Research Note</summary>
+  <summary>研究笔记</summary>
   <div class="section-body">
     <div class="research-note">{{ task.research_note_html|safe }}</div>
   </div>
@@ -341,6 +341,6 @@
 </div>
 
 <div style="margin-top:40px;padding-bottom:40px">
-  <a href="/" class="btn btn-secondary">Back to List</a>
+  <a href="/" class="btn btn-secondary">返回 to List</a>
 </div>
 {% endblock %}

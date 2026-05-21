@@ -1,32 +1,32 @@
 {% extends "base.html" %}
-{% block title %}Review Queue{% endblock %}
+{% block title %}文章审阅{% endblock %}
 
 {% block content %}
 <div class="stats-bar">
   <div class="stat">
     <div class="stat-value">{{ tasks|length }}</div>
-    <div class="stat-label">Awaiting Review</div>
+    <div class="stat-label">待审</div>
   </div>
   <div class="stat">
     <div class="stat-value" style="color:var(--success)">{{ pass_count }}</div>
-    <div class="stat-label">Pass</div>
+    <div class="stat-label">通过</div>
   </div>
   <div class="stat">
     <div class="stat-value" style="color:var(--danger)">{{ fail_count }}</div>
-    <div class="stat-label">Fail</div>
+    <div class="stat-label">未通过</div>
   </div>
   <div class="stat">
     <div class="stat-value">{{ avg_score|round(1) }}</div>
-    <div class="stat-label">Avg Score</div>
+    <div class="stat-label">平均分</div>
   </div>
 </div>
 
 <div class="filter-bar">
-  <input type="text" id="search" placeholder="Search articles..." oninput="filterTable()">
+  <input type="text" id="search" placeholder="搜索文章..." oninput="filterTable()">
   <select id="status-filter" onchange="filterTable()">
-    <option value="all">All</option>
-    <option value="pass">Pass only</option>
-    <option value="fail">Fail only</option>
+    <option value="all">全部</option>
+    <option value="pass">仅通过</option>
+    <option value="fail">仅未通过</option>
   </select>
 </div>
 
@@ -34,16 +34,15 @@
   <thead>
     <tr>
       <th><input type="checkbox" id="select-all" onchange="toggleAll(this)"></th>
-      <th onclick="sortTable(0)">Title <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(1)">Category <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(2)" data-type="num">Overall <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(3)" data-type="num">AI <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(4)" data-type="num">Fab <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(5)" data-type="num">Semantic <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(6)" data-type="num">Hz <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(7)" data-type="num">GEO <span class="sort-arrow"></span></th>
-      <th onclick="sortTable(8)" data-type="num">Chars <span class="sort-arrow"></span></th>
-      <th>Actions</th>
+      <th onclick="sortTable(0)">标题 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(1)">分类 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(2)" data-type="num">总分 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(3)" data-type="num">AI检测 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(4)" data-type="num">编造 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(5)" data-type="num">事实 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(6)" data-type="num">人味 <span class="sort-arrow"></span></th>
+      <th onclick="sortTable(7)" data-type="num">字数 <span class="sort-arrow"></span></th>
+      <th>操作</th>
     </tr>
   </thead>
   <tbody>
@@ -69,15 +68,14 @@
         <span class="score-inline {{ 'good' if item.hz >= 40 else 'mid' if item.hz >= 30 else 'bad' }}">{{ item.hz }}/50</span>
         <span class="badge {{ 'badge-pass' if item.hz >= 40 else 'badge-warn' }}">{{ item.hz_grade }}</span>
       </td>
-      <td><span class="score-inline {{ 'good' if item.geo >= 75 else 'mid' if item.geo >= 50 else 'bad' }}">{{ item.geo }}</span></td>
       <td>{{ item.chars }}</td>
       <td>
         <form method="POST" action="/approve?id={{ item.id }}" style="display:inline">
-          <button type="submit" class="btn-sm approve" onclick="return confirm('Approve and publish?')">A</button>
+          <button type="submit" class="btn-sm approve" onclick="return confirm('确认发布？')">发</button>
         </form>
-        <a href="/revision?id={{ item.id }}" class="btn-sm revise">R</a>
+        <a href="/revision?id={{ item.id }}" class="btn-sm revise">改</a>
         <form method="POST" action="/reject?id={{ item.id }}" style="display:inline">
-          <button type="submit" class="btn-sm reject" onclick="return confirm('Reject this article?')">X</button>
+          <button type="submit" class="btn-sm reject" onclick="return confirm('确认拒绝？')">拒</button>
         </form>
       </td>
     </tr>
@@ -86,11 +84,11 @@
 </table>
 
 <div id="batch-bar">
-  <span id="batch-count" style="font-weight:600">0 selected</span>
+  <span id="batch-count" style="font-weight:600">0 篇已选</span>
   <form method="POST" action="/batch-approve" style="display:inline" id="batch-approve-form">
-    <button type="button" onclick="batchApprove()" class="btn btn-primary" style="font-size:13px;padding:6px 16px">Batch Approve</button>
+    <button type="button" onclick="batchApprove()" class="btn btn-primary" style="font-size:13px;padding:6px 16px">批量发布</button>
   </form>
-  <button onclick="clearBatch()" class="btn btn-secondary" style="font-size:13px;padding:6px 16px">Clear</button>
+  <button onclick="clearBatch()" class="btn btn-secondary" style="font-size:13px;padding:6px 16px">清除</button>
 </div>
 {% endblock %}
 
@@ -130,7 +128,7 @@ function toggleAll(cb) {
 function updateBatchBar() {
   const checked = document.querySelectorAll('.row-cb:checked');
   const bar = document.getElementById('batch-bar');
-  document.getElementById('batch-count').textContent = checked.length + ' selected';
+  document.getElementById('batch-count').textContent = checked.length + ' 篇已选';
   bar.classList.toggle('visible', checked.length > 0);
 }
 
@@ -141,9 +139,8 @@ function getSelectedIds() {
 function batchApprove() {
   const ids = getSelectedIds();
   if (!ids.length) return;
-  if (!confirm('Approve and publish ' + ids.length + ' articles?')) return;
+  if (!confirm('确认批量发布 ' + ids.length + ' 篇文章？')) return;
   const form = document.getElementById('batch-approve-form');
-  // Add hidden inputs for each ID
   form.querySelectorAll('input[name=ids]').forEach(i => i.remove());
   ids.forEach(id => {
     const input = document.createElement('input');
@@ -159,7 +156,6 @@ function clearBatch() {
   updateBatchBar();
 }
 
-// Keyboard navigation
 let selectedRow = -1;
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;

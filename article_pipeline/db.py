@@ -13,7 +13,7 @@ def _expand_path(path: str) -> str:
 class TaskDB:
     """Manages the article pipeline SQLite database."""
 
-    def __init__(self, db_path: str = "~/docs/ai-context/article-pipeline.db"):
+    def __init__(self, db_path: str = "~/docs/ai-context/article-pipeline-v1.db"):
         self.db_path = _expand_path(db_path)
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.conn = sqlite3.connect(self.db_path)
@@ -261,6 +261,6 @@ class TaskDB:
         return results
 
 
-def init_db(db_path: str = "~/docs/ai-context/article-pipeline.db") -> TaskDB:
+def init_db(db_path: str = "~/docs/ai-context/article-pipeline-v1.db") -> TaskDB:
     """Initialize and return a TaskDB instance."""
     return TaskDB(db_path=db_path)

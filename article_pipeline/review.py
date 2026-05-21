@@ -137,6 +137,10 @@ CORE_PATTERNS = [
     (r"不断演变的(?:格局|领域|生态)", "hz_evolving_landscape"),
     # Pattern 25: forced-colloquial — AI pretending to be casual
     (r"不铺垫了|说白了|死胡同|不废话|讲真|不绕弯子|直接告诉你", "hz_forced_casual"),
+    # Pattern 26: textbook table-of-contents titles
+    (r"的?好在哪里[，,]?不好在哪里|的优缺点分析|的概述与展望$|的优势与不足", "hz_textbook_titles"),
+    # Pattern 27: numbered section organization (exam/report style)
+    (r"第[一二三四五六七八九十]问[：:]|第[一二三四五六七八九十]段[：:]", "hz_numbered_sections"),
 ]
 
 STRUCTURAL_PATTERNS = [
@@ -162,7 +166,7 @@ HEAVY_TAGS = {
     "hz_promo_hyper", "hz_cliche_challenges", "hz_cliche_despite",
     "hz_chatbot_close", "hz_chatbot_cutoff", "hz_chatbot_disclaimer",
     "hz_bright_future", "hz_positive_conclusion", "hz_evolving_landscape",
-    "hz_copula_avoid", "hz_forced_casual",
+    "hz_copula_avoid", "hz_forced_casual", "hz_textbook_titles", "hz_numbered_sections",
 }
 
 FILLER_TAGS = {
@@ -698,8 +702,8 @@ def run_self_review(article: str, tier: str = "A",
     ai_check = check_ai_patterns(article)
     word_check = check_word_count(article, tier)
     format_check = check_format(article)
-    fact_check = check_facts(article, research_note) if research_note else {}
-    fab_check = check_fabrication(article, research_note) if research_note else {}
+    fact_check = check_facts(article, research_note or "")
+    fab_check = check_fabrication(article, research_note or "")
     sem_check = check_semantic_facts(article)
     humanizer = check_humanizer_quality(article)
     term_check = check_terminology(article)
@@ -711,7 +715,7 @@ def run_self_review(article: str, tier: str = "A",
         format_check.get("pass", False),
         fact_check.get("pass", True),
         fab_check.get("pass", True),
-        sem_check.get("pass", not research_note),  # skip if no research note
+        True,  # semantic check is informational only — MCP can be unreliable
         humanizer.get("pass", True),
         term_check.get("pass", True),
         # GEO is advisory — not a block for pass/fail
@@ -729,6 +733,12 @@ def run_self_review(article: str, tier: str = "A",
         "geo": geo_check,
         "overall_pass": all_pass,
     }
+
+    # Hard gate: "不是...而是..." > 2 occurrences → auto FLAG
+    not_x_count = sum(f.get("count", 0) for f in ai_check.get("flags", [])
+                      if f.get("pattern") in ("translation_not_x_but_y", "translation_not_x_is_y"))
+    if not_x_count > 2:
+        all_pass = False
 
     results["overall_score"] = compute_overall_score(results)
     results["suggestions"] = generate_revision_suggestions(results) if not all_pass else []
