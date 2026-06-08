@@ -91,7 +91,9 @@ class TaskDB:
                 c.execute("INSERT INTO _migrations (version) VALUES (?)", (ver,))
             except Exception as e:
                 # Column already exists — migration was partially applied
-                pass
+                if "duplicate column" not in str(e).lower():
+                    import sys
+                    print(f"[db] migration v{ver} warning: {e}", file=sys.stderr)
         self.conn.commit()
 
     def add_task(self, keyword: str, category: str = "wp-tech",

@@ -1,4 +1,5 @@
 """Pipeline orchestrator — ties together all stages of article production."""
+from article_pipeline.config import load_config
 import os
 import json
 import yaml
@@ -7,7 +8,7 @@ from pathlib import Path
 from article_pipeline.db import TaskDB
 from article_pipeline.research import gather_research, build_research_note
 from article_pipeline.outline import generate_outline, format_outline_for_review
-from article_pipeline.writer import write_article, write_article_claude
+from article_pipeline.writer import write_article, write_article_claude, get_trust_tier
 from article_pipeline.review import run_self_review
 from article_pipeline.publish import publish_to_wp
 
@@ -35,22 +36,13 @@ def _write_run(task_id: str, workspace: str, status: str,
     fname.write_text(json.dumps(run, ensure_ascii=False, indent=2))
 
 
-def _load_config():
-    config_path = os.path.expanduser("~/.config/article-pipeline/config.yaml")
-    try:
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-            return config if isinstance(config, dict) else {}
-    except (FileNotFoundError, yaml.YAMLError):
-        return {}
-
 
 class Pipeline:
     """Article production pipeline orchestrator."""
 
     def __init__(self, db: TaskDB | None = None):
         self.db = db or TaskDB()
-        self.config = _load_config()
+        self.config = load_config()
 
     def run(self, limit: int = 5):
         """Process next batch of queued tasks through the pipeline."""
@@ -100,10 +92,17 @@ class Pipeline:
                 r = self.process_research(task_id)
                 if r:
                     r = self.process_outline(task_id)
+                    # outline may have stopped for human gate (TIER_EXTERNAL)
+                    task_after = self.db.get_task(task_id)
+                    if task_after and task_after["status"] == "outline_review":
+                        print("Outline awaiting human approval. Use: article-pipeline approve-outline")
+                        return
                     if r:
                         r = self.process_writing(task_id)
                         if r:
                             self.process_review(task_id)
+            elif status == "outline_review":
+                print("Task requires outline approval. Use: article-pipeline approve-outline")
             elif status == "writing":
                 r = self.process_writing(task_id)
                 if r:
@@ -116,6 +115,19 @@ class Pipeline:
             print(f"  FAILED: {e}")
             self.db.update_status(task_id, "skipped",
                                   {"skip_reason": f"resume_error: {e}"})
+
+    def approve_outline(self, task_id: int):
+        """Approve a TIER_EXTERNAL outline and proceed to writing."""
+        task = self.db.get_task(task_id)
+        if not task:
+            print(f"Task #{task_id} not found.")
+            return
+        if task["status"] != "outline_review":
+            print(f"Task #{task_id} is not awaiting outline review (current: {task['status']}).")
+            return
+        self.db.update_status(task_id, "writing")
+        print(f"Outline approved for #{task_id}. Proceeding to writing...")
+        return self.process_writing(task_id)
 
     def process_research(self, task_id: int) -> dict | None:
         """Stage 2: Gather research for a task."""
@@ -150,7 +162,7 @@ class Pipeline:
             retries = meta.get("outline_retries", 0)
             if retries < 2:
                 meta["outline_retries"] = retries + 1
-                self.db.update_status(task_id, "outlining", meta)
+                self.db.update_status(task_id, "queued", meta)
                 print(f"  [outline] Will retry ({retries + 1}/2)")
             else:
                 self.db.update_status(task_id, "skipped",
@@ -172,6 +184,28 @@ class Pipeline:
             self.db.save_stage_output(task_id, "meta_description",
                                        seo["meta_description"])
 
+        # Determine trust tier and store in task metadata
+        tier = get_trust_tier(task["category"])
+        import json as _j
+        meta = _j.loads(task.get("meta_json", "{}") or "{}")
+        meta["trust_tier"] = tier
+        self.db.conn.execute(
+            "UPDATE tasks SET meta_json = ? WHERE id = ?",
+            (_j.dumps(meta), task_id))
+        self.db.conn.commit()
+
+        # TIER_EXTERNAL: stop here for human outline review
+        if tier == "TIER_EXTERNAL":
+            self.db.update_status(task_id, "outline_review")
+            print(f"  [outline] TIER_EXTERNAL — human gate. Outline saved, awaiting approval.")
+            readable = format_outline_for_review(outline)
+            print(f"\n{'='*60}")
+            print(f"  HUMAN GATE — outline requires review before writing")
+            print(f"  Task #{task_id}: {task['keyword']} [{task['category']}]")
+            print(f"  Review the outline, then: article-pipeline approve-outline {task_id}")
+            print(f"{'='*60}")
+            return {"task_id": task_id, "stage": "outline", "status": "awaiting_human"}
+
         self.db.update_status(task_id, "writing")
         print(f"  [outline] Done — {len(outline.get('sections', []))} sections")
 
@@ -185,13 +219,21 @@ class Pipeline:
         outline = json.loads(task["outline"] or "{}")
         research_note = task["research_note"] or ""
 
+        meta = json.loads(task.get("meta_json", "{}") or "{}")
+        tier = meta.get("trust_tier", "TIER_INTERNAL")
+        # Pass platform through outline for tone control
+        outline["platform"] = task.get("platform", "")
+        style_overrides = meta.get("style_overrides")
+
         if task["category"] == "book-knowledge":
             result = write_article_claude(
-                task["keyword"], task["category"], outline, research_note
+                task["keyword"], task["category"], outline, research_note, tier=tier,
+                style_overrides=style_overrides
             )
         else:
             result = write_article(
-                task["keyword"], task["category"], outline, research_note
+                task["keyword"], task["category"], outline, research_note, tier=tier,
+                style_overrides=style_overrides
             )
 
         if "error" in result:
@@ -200,20 +242,49 @@ class Pipeline:
             retries = meta.get("writing_retries", 0)
             if retries < 2:
                 meta["writing_retries"] = retries + 1
-                self.db.update_status(task_id, "writing", meta)
+                self.db.update_status(task_id, "queued", meta)
                 print(f"  [writing] Will retry ({retries + 1}/2)")
             else:
                 self.db.update_status(task_id, "skipped",
                                       {"skip_reason": f"writing_failed: {result['error']}"})
             return None
 
-        self.db.save_stage_output(task_id, "article", result["article"])
+        article = result["article"]
+
+        # Post-process: fix em-dash overuse (LLM writing tic)
+        dashes = article.count("——")
+        if dashes > 3:
+            parts = article.split("——")
+            # Keep first 3 dashes, replace rest with periods
+            kept = parts[:4]  # first 4 parts = 3 dashes between them
+            rest = "。".join(parts[4:])  # remaining parts joined by periods
+            article = "——".join(kept)
+            if rest:
+                article += "。" + rest
+            print(f"  [post] Fixed {dashes} → 3 em-dashes")
+
+        # Stage 4b: Render Mermaid diagrams to SVG
+        from article_pipeline.mermaid import render_article_diagrams, extract_mermaid_blocks
+        mermaid_blocks = extract_mermaid_blocks(article)
+        if mermaid_blocks:
+            diagrams_dir = Path.home() / "workspaces" / "article-pipeline" / "diagrams"
+            rendered = render_article_diagrams(article, diagrams_dir, task_id)
+            if rendered:
+                print(f"  [mermaid] Rendered {len(rendered)}/{len(mermaid_blocks)} diagrams")
+                meta = json.loads(task.get("meta_json", "{}") or "{}")
+                meta["diagrams"] = rendered
+                self.db.conn.execute(
+                    "UPDATE tasks SET meta_json = ? WHERE id = ?",
+                    (json.dumps(meta), task_id))
+                self.db.conn.commit()
+
+        self.db.save_stage_output(task_id, "article", article)
         self.db.update_status(task_id, "reviewing")
         print(f"  [writing] Done — model: {result.get('model', 'unknown')}")
 
         _write_run(f"write-{task_id}", "article-pipeline", "completed",
                     outputs=[{"type": "db", "table": "tasks", "field": "article",
-                              "chars": len(result["article"])}],
+                              "chars": len(article)}],
                     next_step="review")
         return {"task_id": task_id, "stage": "writing"}
 
@@ -222,10 +293,15 @@ class Pipeline:
         task = self.db.get_task(task_id)
         print(f"  [review] Running checks...")
 
+        meta = json.loads(task.get("meta_json", "{}") or "{}")
+        trust_tier = meta.get("trust_tier", "TIER_INTERNAL")
+
         results = run_self_review(
             task["article"] or "",
             tier="A",
-            research_note=task["research_note"] or ""
+            research_note=task["research_note"] or "",
+            trust_tier=trust_tier,
+            category=task.get("category", "")
         )
 
         self.db.add_review_entry(task_id, results,

@@ -8,6 +8,20 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
+
+def _fix_em_dashes(article: str) -> str:
+    """Post-process: limit em-dashes to max 3 per article."""
+    dashes = article.count("——")
+    if dashes <= 3:
+        return article
+    parts = article.split("——")
+    kept = parts[:4]
+    rest = "。".join(parts[4:])
+    article = "——".join(kept)
+    if rest:
+        article += "。" + rest
+    return article
+
 import jinja2
 
 # Add parent dir to path for article_pipeline imports
@@ -110,6 +124,7 @@ def _build_list_item(task: dict) -> dict:
         "id": task['id'],
         "keyword": task.get('keyword', '') or task.get('title', ''),
         "category": task.get('category', ''),
+        "status": task.get('status', ''),
         "overall": 0, "ai": 0, "ai_flags": 0, "fab": 0,
         "sem_verified": 0, "sem_total": 0,
         "hz": 0, "hz_grade": "",
@@ -118,6 +133,11 @@ def _build_list_item(task: dict) -> dict:
         "version": task.get('version', 1),
         "pass": False, "revision_count": revision_count,
     }
+
+    # Add trust tier from task metadata
+    import json as _json
+    meta = _json.loads(task.get('meta_json', '{}') or '{}')
+    item["trust_tier"] = meta.get("trust_tier", "TIER_INTERNAL")
 
     if review:
         ai = review.get('ai_check', {})
@@ -256,7 +276,37 @@ class ReviewHandler(BaseHTTPRequestHandler):
             except (json.JSONDecodeError, TypeError):
                 outline_parsed = None
 
-        article_html = md_to_html(task.get('article', ''))
+        # Pre-process: strip ```mermaid blocks before markdown conversion
+        # (codehilite doesn't know mermaid — it tries to highlight it as code)
+        raw_article = task.get('article', '')
+        meta = json.loads(task.get('meta_json', '{}') or '{}')
+        diagrams = meta.get('diagrams', {})
+        mermaid_placeholders = {}  # placeholder_key → svg_content
+        if diagrams:
+            import re as _re
+            article_for_md = raw_article
+            mermaid_blocks = list(_re.finditer(
+                r'```mermaid\s*\n(.*?)```', article_for_md, _re.DOTALL))
+            # Replace from last to first to preserve positions
+            for i, m in reversed(list(enumerate(mermaid_blocks))):
+                idx_str = str(i)
+                if idx_str in diagrams:
+                    svg_file = Path(diagrams[idx_str])
+                    if svg_file.exists():
+                        ph = f'<!--MERMAID_PLACEHOLDER_{i}-->'
+                        article_for_md = (article_for_md[:m.start()] + ph +
+                                          article_for_md[m.end():])
+                        mermaid_placeholders[ph] = svg_file.read_text()
+
+            article_html = md_to_html(article_for_md)
+
+            # Inject SVGs into placeholders
+            for ph, svg_content in mermaid_placeholders.items():
+                fig = f'<figure class="mermaid-diagram">{svg_content}<figcaption>图 {ph.split("_")[-1]}</figcaption></figure>'
+                article_html = article_html.replace(ph, fig)
+        else:
+            article_html = md_to_html(raw_article)
+
         research_note_html = md_to_html(task.get('research_note', ''))
 
         # Build version history with score deltas
@@ -273,9 +323,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 "created_at": rh.get("created_at", "")[:16],
             })
 
+        trust_tier = meta.get("trust_tier", "TIER_INTERNAL")
         page = _render("detail.html",
                         task={**task, 'outline_parsed': outline_parsed,
-                              'research_note_html': research_note_html},
+                              'research_note_html': research_note_html,
+                              'trust_tier': trust_tier},
                         review=review,
                         feedback_history=feedback_history,
                         version_scores=version_scores,
@@ -391,12 +443,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
 
         # Save as new version
-        revised = result['article']
+        revised = _fix_em_dashes(result['article'])
         old_ver = task.get('version', 1)
         new_ver = db.new_version(task_id, revised)
 
         # Re-run review
-        review = run_self_review(revised, "A", task.get('research_note', ''))
+        review = run_self_review(revised, "A", task.get('research_note', ''),
+                                      category=task.get("category", ""))
         db.add_review_entry(task_id, review, passed=review.get('overall_pass', False))
         db.add_feedback(task_id, "human", "revision",
                          review.get('overall_score', 0),
@@ -438,12 +491,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
 
         # Save as new version
-        db.new_version(task_id, result['article'])
+        revised = _fix_em_dashes(result['article'])
+        db.new_version(task_id, revised)
         db.add_feedback(task_id, 'auto', 'revision', 0,
                         {'notes': f'Auto-revised with {len(suggestions)} suggestions'})
 
-        new_review = run_self_review(result['article'], 'A',
-                                      task.get('research_note', ''))
+        new_review = run_self_review(revised, 'A',
+                                      task.get('research_note', ''),
+                                      category=task.get("category", ""))
         db.add_review_entry(task_id, new_review, passed=new_review.get('overall_pass', False))
         self._redirect(f'/view?id={task_id}')
 

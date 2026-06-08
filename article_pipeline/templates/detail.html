@@ -138,7 +138,27 @@
   </div>
 </details>
 
-<!-- 4. Semantic Facts -->
+{% set xref = review.get("cross_reference") %}
+{% if xref %}
+<!-- 4. 事实溯源检查 -->
+<details class="section" {{ 'open' if not xref.pass }}>
+  <summary>事实溯源检查 <span class="badge {{ 'badge-pass' if xref.pass else 'badge-fail' }}">{{ xref.flags }} unmatched</span></summary>
+  <div class="section-body">
+    {% if xref.details %}
+    {% for d in xref.details %}
+    <div class="suggestion high">
+      <span class="sug-cat">{{ d.type }}</span>
+      <div class="sug-issue">{{ d.value }}</div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--success)">All facts traceable to research note.</p>
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
+<!-- 5. Semantic Facts -->
 <details class="section">
   <summary>Semantic Fact Verification <span class="badge {{ 'badge-pass' if sem.pass else 'badge-fail' }}">{{ sem.verified }}/{{ sem.total_claims }}</span></summary>
   <div class="section-body">

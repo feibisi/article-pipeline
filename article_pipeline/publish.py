@@ -2,23 +2,17 @@
 
 Uses translate's converter.py for Gutenberg block format.
 """
+from article_pipeline.config import load_config
 import os
+import json
 import tempfile
 import subprocess
 import requests
 import yaml
 import re
+from pathlib import Path
 from base64 import b64encode
 
-
-def _load_config():
-    config_path = os.path.expanduser("~/.config/article-pipeline/config.yaml")
-    try:
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-            return config if isinstance(config, dict) else {}
-    except (FileNotFoundError, yaml.YAMLError):
-        return {}
 
 
 def _wp_auth_header():
@@ -30,11 +24,46 @@ def _wp_auth_header():
     return {"Authorization": f"Basic {credentials}"}
 
 
-def _markdown_to_gutenberg(md_text: str, article_type: str = "") -> str:
-    """Convert Markdown to Gutenberg block format using translate's converter."""
-    from converter import md_to_gutenberg, detect_article_type
+def _embed_mermaid_svgs(md_text: str, meta_json: str) -> str:
+    """Replace ```mermaid blocks with base64-embedded SVG images."""
+    import base64
+    try:
+        meta = json.loads(meta_json or "{}")
+        diagrams = meta.get("diagrams", {})
+    except (json.JSONDecodeError, TypeError):
+        return md_text
+
+    if not diagrams:
+        return md_text
+
+    for idx_str, svg_path in diagrams.items():
+        svg_file = Path(svg_path)
+        if not svg_file.exists():
+            continue
+        svg_content = svg_file.read_text()
+        b64 = base64.b64encode(svg_content.encode()).decode()
+        data_uri = f'data:image/svg+xml;base64,{b64}'
+
+        # Find the corresponding ```mermaid block and replace
+        mermaid_blocks = list(re.finditer(
+            r'```mermaid\s*\n.*?```', md_text, re.DOTALL))
+        idx = int(idx_str)
+        if idx < len(mermaid_blocks):
+            m = mermaid_blocks[idx]
+            img_tag = f'<img src="{data_uri}" alt="Mermaid diagram {idx}" />'
+            md_text = md_text[:m.start()] + img_tag + md_text[m.end():]
+
+    return md_text
+
+
+def _markdown_to_gutenberg(md_text: str, article_type: str = "",
+                           meta_json: str = "") -> str:
+    """Convert Markdown to Gutenberg block format."""
+    from article_pipeline.converter import md_to_gutenberg, detect_article_type
     if not article_type:
         article_type = detect_article_type(md_text)
+    # Embed Mermaid SVGs before markdown conversion
+    md_text = _embed_mermaid_svgs(md_text, meta_json)
     # Strip leading markdown code fence wrapper (LLM output format)
     md_text = re.sub(r'^```(?:markdown|md)?\s*\n', '', md_text)
     md_text = re.sub(r'\n```\s*$', '', md_text)
@@ -111,12 +140,22 @@ def publish_to_wp(task_id: int, title: str, article: str,
                   platform: str = "wptea",
                   category: str = "生态系统") -> dict:
     """Publish to WordPress with Gutenberg blocks. Falls back to translate bridge."""
-    config = _load_config()
+    config = load_config()
     wp_config = config.get("wordpress", {})
     wp_url = wp_config.get(f"{platform}_url")
 
     # Convert to Gutenberg block format
-    gutenberg_content = _markdown_to_gutenberg(article)
+    # Look up meta_json for embedded Mermaid SVGs
+    meta_json = ""
+    try:
+        from article_pipeline.db import TaskDB
+        db = TaskDB()
+        t = db.get_task(task_id)
+        if t:
+            meta_json = t.get("meta_json", "{}") or "{}"
+    except Exception:
+        pass
+    gutenberg_content = _markdown_to_gutenberg(article, meta_json=meta_json)
     excerpt = _extract_excerpt(gutenberg_content) or meta_description
 
     # Try REST API first

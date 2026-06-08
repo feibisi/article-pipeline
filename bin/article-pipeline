@@ -13,6 +13,11 @@ Usage:
 
 import sys
 import argparse
+from pathlib import Path
+# Ensure the project root (containing article_pipeline/) is on sys.path
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 from article_pipeline.db import init_db, TaskDB
 
 
@@ -23,7 +28,13 @@ def main():
     # add
     p_add = sub.add_parser("add")
     p_add.add_argument("--keyword", required=True)
-    p_add.add_argument("--category", required=True, choices=["wp-tech", "book-knowledge"])
+    p_add.add_argument("--category", required=True,
+                        choices=["wp-tech", "book-knowledge", "tutorial", "opinion",
+                                 "comparison", "listicle", "guide", "troubleshooting",
+                                 "beginner", "trend", "thought-leadership", "editorial",
+                                 "news", "case-study", "tool-review", "resource-roundup",
+                                 "marketing", "product-launch", "announcement",
+                                 "brand-marketing", "soft-article"])
     p_add.add_argument("--platform", default="wptea")
     p_add.add_argument("--priority", type=int, default=1, choices=[1, 2, 3])
 

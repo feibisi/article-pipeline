@@ -240,6 +240,17 @@ details.section .section-body { padding: 16px; border-top: 1px solid var(--borde
 .research-note code { font-family: var(--mono); font-size: 12px; background: #eee8ff; padding: 1px 4px; border-radius: 3px; }
 .research-note strong { font-weight: 700; }
 
+/* ── Mermaid diagrams ── */
+.mermaid-diagram {
+  margin: 24px 0; padding: 20px; background: #faf8f5;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  text-align: center; overflow-x: auto;
+}
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-diagram figcaption {
+  font-size: 12px; color: var(--muted); margin-top: 8px;
+}
+
 /* ── Outline ── */
 .outline-titles { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .outline-title-row { display: flex; align-items: baseline; gap: 8px; margin: 4px 0; font-size: 14px; }

@@ -53,8 +53,10 @@
       <td><input type="checkbox" class="row-cb" value="{{ item.id }}" onchange="updateBatchBar()"></td>
       <td class="title-cell">
         <span class="badge badge-neutral">v{{ item.version }}</span>
+        {% if item.trust_tier == 'TIER_EXTERNAL' %}<span class="badge badge-warn" title="外部产品文章，需事实确认">EXT</span>{% endif %}
         <a href="/view?id={{ item.id }}">{{ item.keyword }}</a>
         {% if item.revision_count %}<span class="badge badge-rev">R{{ item.revision_count }}</span>{% endif %}
+        {% if item.status == 'outline_review' %}<span class="badge badge-warn">大纲待审</span>{% endif %}
       </td>
       <td>{{ item.category }}</td>
       <td><span class="score-inline {{ 'good' if item.overall >= 6 else 'mid' if item.overall >= 4 else 'bad' }}">{{ item.overall }}</span></td>
