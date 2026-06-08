@@ -8,6 +8,7 @@ import sqlite3
 import requests
 import yaml
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 AI_PATTERNS = [
@@ -19,6 +20,18 @@ AI_PATTERNS = [
     r"综上所述",
     r"不仅如此.{0,10}而且",
 ]
+
+CONTENT_FARMS = frozenset({
+    "csdn.net", "blog.csdn.net",
+    "51cto.com", "blog.51cto.com",
+    "juejin.cn", "juejin.im",
+    "jianshu.com", "www.jianshu.com",
+    "baijiahao.baidu.com",
+    "toutiao.com",
+    "zhihu.com", "www.zhihu.com",
+    "segmentfault.com",
+    "cnblogs.com", "www.cnblogs.com",
+})
 
 
 
@@ -311,8 +324,19 @@ def _clean_title(title: str) -> str:
     return title.strip()
 
 
+def _is_content_farm(url: str) -> bool:
+    """Check if URL belongs to a blocked content farm."""
+    try:
+        host = urlparse(url).hostname or ""
+        return host in CONTENT_FARMS or any(
+            host.endswith("." + d) for d in CONTENT_FARMS if "." in d
+        )
+    except Exception:
+        return False
+
+
 def search_web(query: str, limit: int = 5) -> list[dict]:
-    """Search the web using DuckDuckGo."""
+    """Search the web using DuckDuckGo. Filters out content farms."""
     if not query.strip():
         return []
 
@@ -320,15 +344,123 @@ def search_web(query: str, limit: int = 5) -> list[dict]:
         from ddgs import DDGS
         results = []
         with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=limit):
+            for r in ddgs.text(query, max_results=limit * 3):
+                url = r.get("href", "")
+                if _is_content_farm(url):
+                    continue
                 results.append({
                     "title": _clean_title(r.get("title", "")),
-                    "url": r.get("href", ""),
+                    "url": url,
                     "snippet": r.get("body", "")
                 })
+                if len(results) >= limit:
+                    break
         return results
     except Exception:
         return []
+
+
+def _fetch_article_text(url: str, max_chars: int = 3000, timeout: int = 15) -> str:
+    """Fetch and extract readable text from a URL. Returns first max_chars of content."""
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; ArticlePipeline/1.0)"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        html = resp.text
+
+        # Strip scripts, styles, nav, header, footer
+        html = re.sub(r"<(script|style|nav|header|footer|aside)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
+        # Strip HTML tags
+        text = re.sub(r"<[^>]+>", " ", html)
+        # Normalize whitespace
+        text = re.sub(r"\s+", " ", text).strip()
+        # Decode HTML entities
+        import html as html_mod
+        text = html_mod.unescape(text)
+        return text[:max_chars]
+    except Exception:
+        return ""
+
+
+def _generate_web_queries(keyword: str, category: str) -> list[str]:
+    """Generate multiple search queries from different angles for better coverage."""
+    queries = [keyword]
+
+    # Domain-specific term tables — WP terms extracted from writer glossary at import time
+    _CN_EN: dict[str, str] = {
+        # WP terminology (from WP_GLOSSARY)
+        "仪表盘": "dashboard", "工具栏": "toolbar admin bar",
+        "小工具": "widget", "边栏": "sidebar", "菜单": "menu",
+        "站点编辑器": "site editor", "区块编辑器": "block editor Gutenberg",
+        "区块": "block", "区块模式": "pattern", "模板": "template",
+        "模板部件": "template part", "可复用区块": "reusable block",
+        "全站编辑": "full site editing FSE",
+        "查询循环": "query loop", "组块": "group block",
+        "导航区块": "navigation block", "文章摘要": "post excerpt",
+        "特色图片": "featured image", "封面": "cover",
+        "自定义文章类型": "custom post type", "分类法": "taxonomy",
+        "分类": "category", "标签": "tag",
+        "固定链接": "permalink", "缩略名": "slug",
+        "插件": "plugin", "主题": "theme", "钩子": "hook",
+        "动作": "action", "过滤器": "filter", "短代码": "shortcode",
+        "计划任务": "cron", "临时缓存": "transient",
+        "多站点": "multisite", "子主题": "child theme", "父主题": "parent theme",
+        "自定义器": "customizer", "站点健康": "site health",
+        # General tech terms
+        "性能": "performance", "优化": "optimization",
+        "生产环境": "production", "生产使用": "production ready",
+        "开发": "development", "部署": "deployment",
+        "安全": "security", "数据库": "database",
+        "缓存": "cache caching", "错误": "error fix",
+        "教程": "tutorial guide", "入门": "beginner getting started",
+        "实战": "practical hands-on", "最佳实践": "best practices",
+        "问题": "problems issues", "限制": "limitations",
+        "对比": "comparison vs", "选择": "choose select",
+        "配置": "configuration setup", "安装": "install setup",
+        "升级": "upgrade update", "迁移": "migration migrate",
+        # Content/marketing terms
+        "营销": "marketing", "品牌": "brand",
+        "用户体验": "user experience UX",
+        "转化率": "conversion rate",
+        "流量": "traffic", "增长": "growth",
+        "评测": "review", "推荐": "recommendation",
+        "案例": "case study", "数据": "data statistics",
+        "趋势": "trend", "分析": "analysis",
+    }
+
+    # Build English query by translating Chinese terms found in keyword
+    en_parts = []
+    for cn, en in sorted(_CN_EN.items(), key=lambda x: -len(x[0])):
+        if cn in keyword:
+            en_parts.append(en)
+    # Keep terms already in English
+    for word in keyword.split():
+        if re.match(r'^[a-zA-Z]', word) and word.lower() not in " ".join(en_parts).lower():
+            en_parts.append(word)
+    if en_parts:
+        queries.append(" ".join(en_parts[:6]))
+
+    # Category-specific angle query
+    category_angles = {
+        "opinion": "problems limitations issues",
+        "tutorial": "step by step guide how to",
+        "comparison": "comparison vs alternative",
+        "troubleshooting": "fix error solution",
+        "guide": "best practices guide",
+        "trend": "2026 statistics data report",
+        "news": "announcement update 2026",
+        "tool-review": "review pros cons",
+        "case-study": "case study real world example",
+        "beginner": "beginner getting started tutorial",
+    }
+    angle = category_angles.get(category)
+    if angle:
+        queries.append(keyword + " " + angle)
+
+    return queries[:3]
 
 
 
@@ -393,7 +525,7 @@ def _is_relevant(item: dict, keyword: str) -> bool:
 
 
 def _extract_data_points(sources: dict) -> list[str]:
-    """Extract concrete data points, claims, and stats from MCP results."""
+    """Extract concrete data points, claims, and stats from all sources."""
     points = []
     for item in sources.get("cocobook", [])[:8]:
         source = item.get("_source", "")
@@ -414,12 +546,16 @@ def _extract_data_points(sources: dict) -> list[str]:
         elif title:
             points.append(f"参考: {title}")
 
-    for item in sources.get("web", [])[:3]:
+    # Extract factual sentences from web snippets
+    for item in sources.get("web", [])[:8]:
         snippet = item.get("snippet", "")
+        title = item.get("title", "")
+        # Sentences with numbers/percentages/dates
         num_sentences = re.findall(r"[^。.!！?？\n]*(?:\d+[%％倍亿万千]|\d{4}年)[^。.!！?？\n]*[。.]", snippet)
         for s in num_sentences[:3]:
             if len(s) > 10:
-                points.append(f"数据: {s.strip()}")
+                points.append(f"数据: {s.strip()} (来源: {title})")
+
     for item in sources.get("code", [])[:3]:
         points.append(f"代码: {item.get('file', '')}")
 
@@ -513,11 +649,27 @@ def build_research_note(keyword: str, sources: dict) -> str:
 
     if sources.get("web"):
         sections.append("\n### 网络来源（搜索结果，非权威引用。写作时引用具体内容，不要引用域名）")
-        for item in sources["web"][:5]:
+        for item in sources["web"][:8]:
             title = item.get("title", "")
             snippet = item.get("snippet", "")[:200]
-            # Strip domain — model should cite article/source name, not raw URL
             sections.append(f"- **{title}**: {snippet}")
+
+    # Deep web content — fetched article text
+    web_articles = sources.get("web_articles", [])
+    if web_articles:
+        sections.append(f"\n### 网络文章全文摘要（{len(web_articles)} 篇，可直接引用具体段落）")
+        for item in web_articles[:5]:
+            title = item.get("title", "")
+            text = item.get("text", "")
+            if not text:
+                continue
+            # Split into paragraphs, keep substantive ones (>40 chars)
+            paragraphs = [p.strip() for p in text.split("。") if len(p.strip()) > 40]
+            # Take up to 8 key paragraphs
+            kept = paragraphs[:8]
+            sections.append(f"\n#### {title}")
+            for p in kept:
+                sections.append(f"- {p}。")
 
     if sources.get("code"):
         sections.append("\n### 代码依据")
@@ -530,8 +682,8 @@ def build_research_note(keyword: str, sources: dict) -> str:
             sections.append(f"- **{item.get('vm', '')}**: {item.get('response', '')}")
 
     note = "\n".join(sections)
-    if len(note) > 4000:
-        cutoff = note[:4000].rfind("\n")
+    if len(note) > 8000:
+        cutoff = note[:8000].rfind("\n")
         note = note[:cutoff] + "\n\n[... 已截断，完整素材保留在数据库]"
 
     return note
@@ -540,7 +692,32 @@ def build_research_note(keyword: str, sources: dict) -> str:
 def gather_research(keyword: str, category: str) -> dict:
     """Run all research channels, return compiled sources."""
     cocobook_results = search_cocobook(keyword)
-    web_results = search_web(keyword)
+
+    # Multi-query web search for broader coverage
+    queries = _generate_web_queries(keyword, category)
+    web_results = []
+    seen_urls = set()
+    for q in queries:
+        for item in search_web(q, limit=5):
+            url = item.get("url", "")
+            if url not in seen_urls:
+                seen_urls.add(url)
+                web_results.append(item)
+
+    # Fetch full text from top web results
+    web_articles = []
+    for item in web_results[:5]:
+        url = item.get("url", "")
+        text = _fetch_article_text(url)
+        if text and len(text) > 200:
+            web_articles.append({
+                "title": item.get("title", ""),
+                "url": url,
+                "text": text,
+            })
+    if web_articles:
+        print(f"  [research] Fetched {len(web_articles)} web articles")
+
     code_results = search_codebase(keyword)
 
     # Topic search — route to relevant indexes based on keyword
@@ -589,6 +766,7 @@ def gather_research(keyword: str, category: str) -> dict:
     sources = {
         "cocobook": cocobook_results,
         "web": web_results,
+        "web_articles": web_articles,
         "code": code_results,
         "vm_consult": [],
         "writing_samples": get_writing_samples(keyword),

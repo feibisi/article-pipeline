@@ -289,7 +289,7 @@ def _build_writer_prompt(keyword: str, category: str, outline: dict,
         title = outline["titles"][0].get("text", keyword)
 
     # EXTERNAL articles get more research context
-    trunc_limit = 8000 if tier == "TIER_EXTERNAL" else 4000
+    trunc_limit = 8000
     source_note = research_note[:trunc_limit]
     if len(source_note) < 200:
         source_note += ('\n\n[素材较少。只写素材中确认的事实，不编造数据或来源。'

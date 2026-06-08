@@ -35,15 +35,21 @@ def test_build_research_note_structure():
 
 
 def test_build_research_note_truncation():
-    """Research note is truncated when content exceeds 4000 chars."""
+    """Research note is truncated when content exceeds 8000 chars."""
     sources = {
-        "cocobook": [{"title": f"书{i}", "author": f"作者{i} " + "著" * 300, "_source": "books"} for i in range(30)],
+        "cocobook": [{"title": f"书{i}", "author": f"作者{i}",
+                       "claim": "观点内容" * 120, "type": "principle",
+                       "_source": "annotations"} for i in range(100)],
+        "annotations": [{"book": f"书{i}", "author": f"作者{i}",
+                          "type": "principle", "claim": "观点" * 150,
+                          "context": "上下文" * 50} for i in range(30)],
         "web": [{"title": f"文章{i}", "url": f"https://example.com/{i}",
-                  "snippet": "内容" * 200} for i in range(15)],
+                  "snippet": "内容" * 200} for i in range(40)],
         "code": [],
         "vm_consult": [],
     }
     note = build_research_note("关键词", sources)
+    assert len(note) < 9000
     assert "[... 已截断" in note
 
 
