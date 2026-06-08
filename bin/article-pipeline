@@ -37,6 +37,7 @@ def main():
                                  "brand-marketing", "soft-article"])
     p_add.add_argument("--platform", default="wptea")
     p_add.add_argument("--priority", type=int, default=1, choices=[1, 2, 3])
+    p_add.add_argument("--allow-duplicate", action="store_true", help="Allow duplicate keywords")
 
     # list
     p_list = sub.add_parser("list")
@@ -67,6 +68,10 @@ def main():
     p_skip.add_argument("task_id", type=int)
     p_skip.add_argument("--reason", required=True)
 
+    # unpublish
+    p_unpub = sub.add_parser("unpublish")
+    p_unpub.add_argument("task_id", type=int)
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -77,7 +82,7 @@ def main():
     db = TaskDB()
 
     if args.command == "add":
-        task_id = db.add_task(args.keyword, args.category, args.platform, args.priority)
+        task_id = db.add_task(args.keyword, args.category, args.platform, args.priority, allow_duplicate=args.allow_duplicate)
         print(f"Task #{task_id} added: {args.keyword} [{args.category}]")
 
     elif args.command == "list":

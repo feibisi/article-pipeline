@@ -286,7 +286,7 @@ JARGON_BLACKLIST = [
 ]
 
 
-COCOBOOK_API = "http://192.168.1.230:8087"
+COCOBOOK_API = load_config().get("mcp", {}).get("base_url", "http://192.168.1.230:8087")
 
 
 def check_jargon(article: str) -> dict:

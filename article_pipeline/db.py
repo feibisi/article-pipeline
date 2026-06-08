@@ -97,8 +97,17 @@ class TaskDB:
         self.conn.commit()
 
     def add_task(self, keyword: str, category: str = "wp-tech",
-                 platform: str = "wptea", priority: int = 2) -> int:
+                 platform: str = "wptea", priority: int = 2,
+                 allow_duplicate: bool = False) -> int | None:
         c = self.conn.cursor()
+        if not allow_duplicate:
+            c.execute(
+                "SELECT id, status FROM tasks WHERE keyword = ? AND status != 'skipped' AND status != 'rejected'",
+                (keyword,))
+            existing = c.fetchone()
+            if existing:
+                print(f"  Duplicate: '{keyword}' already exists as #{existing[0]} ({existing[1]})")
+                return existing[0]
         c.execute(
             "INSERT INTO tasks (keyword, category, platform, priority) "
             "VALUES (?, ?, ?, ?)",

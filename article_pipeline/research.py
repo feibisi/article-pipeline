@@ -23,7 +23,7 @@ AI_PATTERNS = [
 
 
 # MCP endpoint — cocobook v5 on huawei-pc (SSE transport, JSON-RPC 2.0 over /message)
-MCP_BASE = "http://192.168.1.230:8087"
+MCP_BASE = load_config().get("mcp", {}).get("base_url", "http://192.168.1.230:8087")
 
 # All available technical topic indexes (wenpai built, 2026-05-21 ~ 05-24)
 ALL_TOPICS = {

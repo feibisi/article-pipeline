@@ -1,5 +1,6 @@
 """Pipeline orchestrator — ties together all stages of article production."""
 from article_pipeline.config import load_config
+from article_pipeline.text_utils import fix_em_dashes
 import os
 import json
 import yaml
@@ -251,17 +252,10 @@ class Pipeline:
 
         article = result["article"]
 
-        # Post-process: fix em-dash overuse (LLM writing tic)
-        dashes = article.count("——")
-        if dashes > 3:
-            parts = article.split("——")
-            # Keep first 3 dashes, replace rest with periods
-            kept = parts[:4]  # first 4 parts = 3 dashes between them
-            rest = "。".join(parts[4:])  # remaining parts joined by periods
-            article = "——".join(kept)
-            if rest:
-                article += "。" + rest
-            print(f"  [post] Fixed {dashes} → 3 em-dashes")
+        article = fix_em_dashes(article)
+        prev_dashes = result["article"].count("——")
+        if prev_dashes > 3:
+            print(f"  [post] Fixed {prev_dashes} → 3 em-dashes")
 
         # Stage 4b: Render Mermaid diagrams to SVG
         from article_pipeline.mermaid import render_article_diagrams, extract_mermaid_blocks
@@ -279,6 +273,29 @@ class Pipeline:
                 self.db.conn.commit()
 
         self.db.save_stage_output(task_id, "article", article)
+
+        # Track API token usage
+        tokens = result.get("tokens", {})
+        if tokens:
+            meta = json.loads(task.get("meta_json", "{}") or "{}")
+            cost_log = meta.setdefault("cost_log", [])
+            cost_log.append({
+                "model": result.get("model", "unknown"),
+                "input_tokens": tokens.get("input_tokens", 0),
+                "output_tokens": tokens.get("output_tokens", 0),
+                "stage": "writing",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+            self.db.conn.execute(
+                "UPDATE tasks SET meta_json = ? WHERE id = ?",
+                (json.dumps(meta), task_id))
+            self.db.conn.commit()
+            total_in = sum(e.get("input_tokens", 0) for e in cost_log)
+            total_out = sum(e.get("output_tokens", 0) for e in cost_log)
+            print(f"  [cost] input={tokens.get('input_tokens', 0)}, "
+                  f"output={tokens.get('output_tokens', 0)}, "
+                  f"running_total={total_in+total_out}")
+
         self.db.update_status(task_id, "reviewing")
         print(f"  [writing] Done — model: {result.get('model', 'unknown')}")
 
@@ -322,6 +339,23 @@ class Pipeline:
                     next_step="human_review" if results.get("overall_pass") else "human_review_or_revise")
         return results
 
+
+    def unpublish(self, task_id: int):
+        """Revert a published/done task back to reviewing for revision."""
+        task = self.db.get_task(task_id)
+        if not task:
+            print(f"Task #{task_id} not found.")
+            return
+        if task["status"] not in ("done", "published"):
+            print(f"Task #{task_id} is not published (current: {task['status']})")
+            return
+        # Note: this does NOT delete the WordPress post (requires WP REST API delete).
+        # It reverts the pipeline status so the article can be revised and republished.
+        self.db.update_status(task_id, "reviewing",
+                              {"unpublished_at": datetime.now(timezone.utc).isoformat()})
+        print(f"  Task #{task_id} reverted to reviewing. "
+              f"WP post still exists — delete manually if needed: "
+              f"{task.get('published_url', 'N/A')}")
     def show_review_queue(self):
         """Display articles ready for human review (status=reviewing)."""
         tasks = self.db.list_tasks(status="reviewing")

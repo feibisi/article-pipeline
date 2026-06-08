@@ -9,26 +9,15 @@ from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 
 
-def _fix_em_dashes(article: str) -> str:
-    """Post-process: limit em-dashes to max 3 per article."""
-    dashes = article.count("——")
-    if dashes <= 3:
-        return article
-    parts = article.split("——")
-    kept = parts[:4]
-    rest = "。".join(parts[4:])
-    article = "——".join(kept)
-    if rest:
-        article += "。" + rest
-    return article
-
 import jinja2
 
 # Add parent dir to path for article_pipeline imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from article_pipeline.db import TaskDB
+from article_pipeline.text_utils import fix_em_dashes
 
 PORT = 8765
+AUTH_TOKEN = os.environ.get("AP_REVIEW_TOKEN", "")  # Set this env var to enable POST auth
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
@@ -219,7 +208,22 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
     # ── POST routes ──
 
+    def _check_auth(self) -> bool:
+        """Check Bearer token for POST requests. Returns True if authorized."""
+        if not AUTH_TOKEN:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth == f"Bearer {AUTH_TOKEN}":
+            return True
+        self.send_response(401)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Unauthorized")
+        return False
+
     def do_POST(self):
+        if not self._check_auth():
+            return
         path = urlparse(self.path).path
         params = parse_qs(urlparse(self.path).query)
 
@@ -443,7 +447,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
 
         # Save as new version
-        revised = _fix_em_dashes(result['article'])
+        revised = fix_em_dashes(result['article'])
         old_ver = task.get('version', 1)
         new_ver = db.new_version(task_id, revised)
 
@@ -491,7 +495,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
 
         # Save as new version
-        revised = _fix_em_dashes(result['article'])
+        revised = fix_em_dashes(result['article'])
         db.new_version(task_id, revised)
         db.add_feedback(task_id, 'auto', 'revision', 0,
                         {'notes': f'Auto-revised with {len(suggestions)} suggestions'})
