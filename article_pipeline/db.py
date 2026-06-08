@@ -159,13 +159,15 @@ class TaskDB:
         c = self.conn.cursor()
         c.execute(f"UPDATE tasks SET {fields} WHERE id=?", params)
 
+        # Always track status transition time in meta_json
+        c.execute("SELECT meta_json FROM tasks WHERE id=?", (task_id,))
+        row = c.fetchone()
+        existing = json.loads(row[0]) if row and row[0] else {}
+        existing["status_changed_at"] = now
         if meta:
-            c.execute("SELECT meta_json FROM tasks WHERE id=?", (task_id,))
-            row = c.fetchone()
-            existing = json.loads(row[0]) if row and row[0] else {}
             existing.update(meta)
-            c.execute("UPDATE tasks SET meta_json=? WHERE id=?",
-                      (json.dumps(existing, ensure_ascii=False), task_id))
+        c.execute("UPDATE tasks SET meta_json=? WHERE id=?",
+                  (json.dumps(existing, ensure_ascii=False), task_id))
 
         self.conn.commit()
 
@@ -244,6 +246,68 @@ class TaskDB:
              json.dumps(feedback or {}, ensure_ascii=False))
         )
         self.conn.commit()
+
+    def get_stuck_tasks(self, max_minutes: int = 30) -> list[dict]:
+        """Find tasks stuck in non-terminal states for longer than max_minutes."""
+        active_states = ("researching", "outlining", "writing", "outline_review")
+        placeholders = ",".join(["?"] * len(active_states))
+        c = self.conn.cursor()
+        c.execute(
+            f"SELECT * FROM tasks WHERE status IN ({placeholders}) "
+            "ORDER BY priority ASC, created_at ASC",
+            active_states
+        )
+        candidates = [dict(r) for r in c.fetchall()]
+        cutoff = datetime.now(timezone.utc).timestamp() - max_minutes * 60
+
+        stuck = []
+        for t in candidates:
+            meta = json.loads(t.get("meta_json") or "{}")
+            changed_at_str = meta.get("status_changed_at")
+            if not changed_at_str:
+                # No transition recorded — use created_at as fallback
+                changed_at_str = t.get("created_at", "")
+            try:
+                changed_ts = datetime.fromisoformat(changed_at_str.replace("Z", "+00:00")).timestamp()
+            except (ValueError, TypeError):
+                continue
+            if changed_ts < cutoff:
+                t["stuck_since"] = changed_at_str
+                stuck.append(t)
+        return stuck
+
+    def recover_stuck(self, max_minutes: int = 30) -> list[dict]:
+        """Roll back stuck tasks to their last stable state. Returns recovery report."""
+        stuck = self.get_stuck_tasks(max_minutes)
+        if not stuck:
+            return []
+
+        recovered = []
+        for task in stuck:
+            tid = task["id"]
+            status = task["status"]
+            has_research = bool(task.get("research_note"))
+            has_outline = bool(task.get("outline"))
+
+            if status in ("researching",) or (status == "outlining" and not has_research):
+                rollback_to = "queued"
+            elif status in ("outlining", "outline_review") and has_research:
+                rollback_to = "researching"
+            elif status == "writing" and has_outline:
+                rollback_to = "outlining"
+            elif status == "writing" and has_research:
+                rollback_to = "researching"
+            else:
+                rollback_to = "queued"
+
+            self.update_status(tid, rollback_to,
+                               {"recovered_from": status,
+                                "recovered_at": datetime.now(timezone.utc).isoformat()})
+            recovered.append({
+                "id": tid, "keyword": task["keyword"],
+                "was": status, "rolled_back_to": rollback_to,
+            })
+        return recovered
 
     def get_latest_feedback(self, task_id: int) -> dict | None:
         c = self.conn.cursor()

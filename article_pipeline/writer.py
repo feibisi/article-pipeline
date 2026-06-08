@@ -5,6 +5,7 @@ import os
 import re
 from datetime import date
 import requests
+import time
 import yaml
 
 
@@ -425,45 +426,65 @@ def _call_with_fallback(system_prompt: str, user_prompt: str,
 def _call_messages_api(base_url: str, api_key: str, model: str,
                        system_prompt: str, user_prompt: str,
                        max_tokens: int = 4096) -> dict:
-    try:
-        resp = requests.post(
-            f"{base_url}/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": model,
-                "max_tokens": max_tokens,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_prompt}]
-            },
-            timeout=180
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    max_retries = 3
+    backoff = [5, 15, 45]
 
-        text_parts = []
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                text_parts.append(block.get("text", ""))
-        content = "\n".join(text_parts)
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(
+                f"{base_url}/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}]
+                },
+                timeout=180
+            )
+            # Don't retry 4xx client errors (except 429)
+            if resp.status_code == 429:
+                if attempt < max_retries:
+                    wait = backoff[attempt]
+                    print(f"  [api] Rate limited (429), retrying in {wait}s ({attempt+1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+            elif 400 <= resp.status_code < 500:
+                return {"error": "client_error",
+                        "message": f"HTTP {resp.status_code}: {resp.text[:200]}"}
 
-        return {
-            "article": content,
-            "model": data.get("model", model),
-            "tokens": data.get("usage", {})
-        }
-    except requests.ConnectionError:
-        return {"error": "api_unreachable",
-                "message": f"Cannot connect to {base_url}"}
-    except requests.Timeout:
-        return {"error": "api_timeout", "message": "Request timed out after 180s"}
-    except requests.RequestException as e:
-        return {"error": "request_failed", "message": str(e)}
-    except (KeyError, IndexError, TypeError) as e:
-        return {"error": "bad_response", "message": str(e)}
+            resp.raise_for_status()
+            data = resp.json()
+
+            text_parts = []
+            for block in data.get("content", []):
+                if block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            content = "\n".join(text_parts)
+
+            return {
+                "article": content,
+                "model": data.get("model", model),
+                "tokens": data.get("usage", {})
+            }
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt < max_retries:
+                wait = backoff[attempt]
+                print(f"  [api] {type(e).__name__}, retrying in {wait}s ({attempt+1}/{max_retries})")
+                time.sleep(wait)
+                continue
+            return {"error": "api_unreachable" if isinstance(e, requests.ConnectionError) else "api_timeout",
+                    "message": str(e)}
+        except requests.RequestException as e:
+            return {"error": "request_failed", "message": str(e)}
+        except (KeyError, IndexError, TypeError) as e:
+            return {"error": "bad_response", "message": str(e)}
+
+    return {"error": "max_retries_exceeded", "message": f"Failed after {max_retries} retries"}
 
 
 EDITOR_SYSTEM_PROMPT = f"""你是一位严苛的中文技术编辑。你的任务是对文章做最后润色——砍废话、强化判断、让文章有骨头。

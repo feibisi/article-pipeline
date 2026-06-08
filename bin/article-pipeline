@@ -3,12 +3,15 @@
 
 Usage:
   article-pipeline add --keyword "xxx" --category wp-tech [--priority 1]
-  article-pipeline list [--status queued|researching|outlining|writing|reviewing|done]
+  article-pipeline list [--status queued|researching|outlining|writing|reviewing|done|stuck]
   article-pipeline status <task_id>
   article-pipeline run    # process next batch of queued tasks
+  article-pipeline continue <task_id>  # resume from current stage
+  article-pipeline recover [--max-minutes 30]  # roll back stuck tasks
   article-pipeline review # show articles ready for human review
   article-pipeline publish <task_id>
   article-pipeline skip <task_id> --reason "..."
+  article-pipeline unpublish <task_id>
 """
 
 import sys
@@ -56,6 +59,13 @@ def main():
     p_cont = sub.add_parser("continue")
     p_cont.add_argument("task_id", type=int)
 
+    # recover (roll back stuck tasks)
+    p_recover = sub.add_parser("recover")
+    p_recover.add_argument("--max-minutes", type=int, default=30,
+                           help="Consider tasks stuck after this many minutes (default: 30)")
+    p_recover.add_argument("--dry-run", action="store_true",
+                           help="Show what would be recovered without doing it")
+
     # review
     p_review = sub.add_parser("review")
 
@@ -86,11 +96,21 @@ def main():
         print(f"Task #{task_id} added: {args.keyword} [{args.category}]")
 
     elif args.command == "list":
-        tasks = db.list_tasks(status=args.status, category=args.category)
-        print(f"{'ID':<5} {'Status':<14} {'P':<2} {'Category':<16} {'Keyword'}")
-        print("-" * 70)
-        for t in tasks:
-            print(f"{t['id']:<5} {t['status']:<14} {t['priority']:<2} {t['category']:<16} {t['keyword']}")
+        if args.status == "stuck":
+            tasks = db.get_stuck_tasks()
+            if not tasks:
+                print("No stuck tasks found.")
+            else:
+                print(f"{'ID':<5} {'Status':<14} {'P':<2} {'Category':<16} {'Keyword':<30} {'Stuck Since'}")
+                print("-" * 100)
+                for t in tasks:
+                    print(f"{t['id']:<5} {t['status']:<14} {t['priority']:<2} {t['category']:<16} {t['keyword'][:30]:<30} {t.get('confirmed_at', '?')}")
+        else:
+            tasks = db.list_tasks(status=args.status, category=args.category)
+            print(f"{'ID':<5} {'Status':<14} {'P':<2} {'Category':<16} {'Keyword'}")
+            print("-" * 70)
+            for t in tasks:
+                print(f"{t['id']:<5} {t['status']:<14} {t['priority']:<2} {t['category']:<16} {t['keyword']}")
 
     elif args.command == "status":
         task = db.get_task(args.task_id)
@@ -110,6 +130,24 @@ def main():
         pipeline = Pipeline()
         pipeline.resume(args.task_id)
 
+    elif args.command == "recover":
+        if args.dry_run:
+            stuck = db.get_stuck_tasks(max_minutes=args.max_minutes)
+            if not stuck:
+                print("No stuck tasks found.")
+            else:
+                print(f"Found {len(stuck)} stuck task(s) (dry run, no changes made):")
+                for t in stuck:
+                    print(f"  #{t['id']} {t['keyword']} — currently {t['status']}")
+        else:
+            recovered = db.recover_stuck(max_minutes=args.max_minutes)
+            if not recovered:
+                print("No stuck tasks to recover.")
+            else:
+                print(f"Recovered {len(recovered)} task(s):")
+                for r in recovered:
+                    print(f"  #{r['id']} {r['keyword']}: {r['was']} -> {r['rolled_back_to']}")
+
     elif args.command == "review":
         from article_pipeline.pipeline import Pipeline
         pipeline = Pipeline()
@@ -123,6 +161,11 @@ def main():
     elif args.command == "skip":
         db.update_status(args.task_id, "skipped", {"skip_reason": args.reason})
         print(f"Task #{args.task_id} skipped: {args.reason}")
+
+    elif args.command == "unpublish":
+        from article_pipeline.pipeline import Pipeline
+        pipeline = Pipeline()
+        pipeline.unpublish(args.task_id)
 
 
 if __name__ == "__main__":
