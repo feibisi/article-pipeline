@@ -86,6 +86,7 @@ WRITER_SYSTEM_PROMPT = f"""你是面向中文 WordPress 开发者的技术编辑
 唯一信息来源是"参考素材"。编造数据、URL、书名、人名、公司名是写作事故。
 - 所有数字、百分比、时间、版本号必须来自参考素材
 - 不引用裸域名（"根据 xxx.com"）。引用文章标题或机构名称
+- 不引用网站名称作为论据（"Codeable 的指南指出""WordPress 大学介绍"）。直接陈述事实
 - 参考素材没有的，跳过不写。禁止元评论（"素材没有数据""本文无法给出量化对比"）
 
 ## 术语
@@ -94,7 +95,10 @@ WRITER_SYSTEM_PROMPT = f"""你是面向中文 WordPress 开发者的技术编辑
 ## 输出
 - 把主题讲清楚为止。不设字数上下限。如果 1500 字讲清楚了就写 1500 字。不要为凑字数重复解释或硬塞例子。
 - 结论必须有明确立场。禁止"取决于需求""各有优劣""两者都很优秀"
-- 如果结论可以用在任何同类文章里，重写结论"""
+- 如果结论可以用在任何同类文章里，重写结论
+- 禁止用非技术文学词汇（"乌托邦""殿堂""殿堂级""颠覆""重构""革命性"等夸张词）
+- 禁止攻击性口语（"闭嘴""残破""垃圾"）。犀利 ≠ 粗暴，判断力 ≠ 攻击性
+- 全文不超过3个破折号（——）。正常中文写作不会用超过两次破折号"""
 
 
 def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
@@ -393,6 +397,7 @@ def _extract_samples(research_note: str) -> list[dict]:
 
 def _get_api_key() -> str | None:
     return (os.environ.get("AP_DS_API_KEY") or
+            os.environ.get("DEEPSEEK_API_KEY") or
             os.environ.get("ANTHROPIC_API_KEY") or
             os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
@@ -406,6 +411,8 @@ def _call_with_fallback(system_prompt: str, user_prompt: str,
     if not api_key:
         return {"error": "missing_api_key"}
 
+    temperature = ds.get("temperature")
+
     endpoints = [
         (ds.get("base_url", "https://api.z.ai/api/anthropic"),
          ds.get("model", "glm-5.1")),
@@ -417,7 +424,8 @@ def _call_with_fallback(system_prompt: str, user_prompt: str,
         if not base_url or not model:
             continue
         result = _call_messages_api(base_url, api_key, model,
-                                    system_prompt, user_prompt, max_tokens)
+                                    system_prompt, user_prompt, max_tokens,
+                                    temperature=temperature)
         if "error" not in result:
             return result
     return result  # Return last error
@@ -425,12 +433,21 @@ def _call_with_fallback(system_prompt: str, user_prompt: str,
 
 def _call_messages_api(base_url: str, api_key: str, model: str,
                        system_prompt: str, user_prompt: str,
-                       max_tokens: int = 4096) -> dict:
+                       max_tokens: int = 4096,
+                       temperature: float | None = None) -> dict:
     max_retries = 3
     backoff = [5, 15, 45]
 
     for attempt in range(max_retries + 1):
         try:
+            payload = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}]
+            }
+            if temperature is not None:
+                payload["temperature"] = temperature
             resp = requests.post(
                 f"{base_url}/v1/messages",
                 headers={
@@ -438,12 +455,7 @@ def _call_messages_api(base_url: str, api_key: str, model: str,
                     "anthropic-version": "2023-06-01",
                     "Content-Type": "application/json"
                 },
-                json={
-                    "model": model,
-                    "max_tokens": max_tokens,
-                    "system": system_prompt,
-                    "messages": [{"role": "user", "content": user_prompt}]
-                },
+                json=payload,
                 timeout=180
             )
             # Don't retry 4xx client errors (except 429)
