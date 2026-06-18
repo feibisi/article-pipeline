@@ -59,17 +59,36 @@ def _render(template_name: str, **kwargs) -> str:
 
 
 def md_to_html(text: str) -> str:
-    """Convert Markdown to HTML using Python-Markdown library."""
+    """Convert Markdown to HTML, sanitizing output for safe rendering."""
     if not text:
         return ""
     import markdown as md_lib
+    import nh3
     # Strip leading markdown code fence wrapper (LLM output format)
     text = re.sub(r'^```(?:markdown|md)?\s*\n', '', text)
     text = re.sub(r'\n```\s*$', '', text)
-    return md_lib.markdown(text, extensions=[
+    raw_html = md_lib.markdown(text, extensions=[
         'tables', 'fenced_code', 'codehilite',
         'toc', 'sane_lists',
     ], output_format='html5')
+    # Sanitize: strip scripts, event handlers, and other XSS vectors
+    # from web-fetched content that may pass through research notes
+    return nh3.clean(raw_html, tags=nh3.ALLOWED_TAGS | {
+        'img', 'span', 'div', 'pre', 'code', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'table', 'thead', 'tbody', 'tr', 'th', 'td', 'blockquote', 'hr', 'br',
+        'a', 'p', 'ul', 'ol', 'li', 'em', 'strong', 'del', 'sub', 'sup',
+        'details', 'summary',
+    }, attributes={
+        'a': {'href', 'title', 'target', 'rel'},
+        'img': {'src', 'alt', 'title', 'width', 'height'},
+        'td': {'align', 'valign', 'colspan', 'rowspan'},
+        'th': {'align', 'valign', 'colspan', 'rowspan'},
+        'code': {'class'},
+        'pre': {'class'},
+        'span': {'class'},
+        'div': {'class'},
+        '*': {'id'},
+    }, link_rel=None)
 
 
 def _get_review(task_id: int) -> dict:

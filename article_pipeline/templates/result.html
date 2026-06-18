@@ -4,7 +4,7 @@
 {% block content %}
 <div style="text-align:center;padding:60px 0">
   <h1>{{ title }}</h1>
-  {% if message %}<p style="color:var(--muted);font-size:16px">{{ message|safe }}</p>{% endif %}
+  {% if message %}<p style="color:var(--muted);font-size:16px">{{ message }}</p>{% endif %}
   {% if detail %}<p style="margin-top:16px">{{ detail }}</p>{% endif %}
   <div style="margin-top:32px">
     {% if back_url %}
