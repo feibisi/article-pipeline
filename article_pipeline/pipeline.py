@@ -158,6 +158,18 @@ class Pipeline:
         note = build_research_note(task["keyword"], sources)
 
         self.db.save_stage_output(task_id, "research_note", note)
+        # Save sources for synthesis layer (in meta_json)
+        sources_json = json.dumps({
+            "annotations": sources.get("annotations", [])[:10],
+            "ddg_results": sources.get("web", [])[:10],
+            "web_articles": sources.get("web_articles", [])[:5],
+            "topic_paragraphs": sources.get("topic_paragraphs", [])[:10],
+        }, ensure_ascii=False)
+        self.db.conn.execute(
+            "UPDATE tasks SET meta_json=? WHERE id=?",
+            (sources_json, task_id)
+        )
+        self.db.conn.commit()
         self.db.update_status(task_id, "synthesizing")
         print(f"  [research] Done — {len(note)} chars, "
               f"{len(sources.get('cocobook', []))} book results")
@@ -169,15 +181,18 @@ class Pipeline:
         task = self.db.get_task(task_id)
         print(f"  [synthesis] Analyzing...")
 
-        # Build sources dict from research_note
-        # Note: research_note is text format, synthesis expects structured data
-        # For now, pass minimal structure to avoid breaking
+        # Load sources from meta_json (saved by process_research)
+        meta_json = task.get("meta_json", "{}")
+        try:
+            sources_data = json.loads(meta_json) if meta_json != "{}" else {}
+        except json.JSONDecodeError:
+            sources_data = {}
+
         sources = {
-            "research_note": task.get("research_note", ""),
-            "annotations": [],  # TODO: extract from research_note
-            "ddg_results": [],
-            "web_articles": [],
-            "topic_paragraphs": [],
+            "annotations": sources_data.get("annotations", []),
+            "ddg_results": sources_data.get("ddg_results", []),
+            "web_articles": sources_data.get("web_articles", []),
+            "topic_paragraphs": sources_data.get("topic_paragraphs", []),
         }
 
         synthesis = run_synthesis(sources)
@@ -246,7 +261,7 @@ class Pipeline:
         }, ensure_ascii=False)
         self.db.save_stage_output(task_id, "framework", framework_json)
 
-        self.db.update_status(task_id, "outlining")
+        self.db.update_status(task_id, "prosody")
         print(f"  [framework] Done — method: {framework.method}, sections: {len(framework.structure)}")
 
         return {"task_id": task_id, "stage": "framework", "method": framework.method}
