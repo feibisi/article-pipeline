@@ -170,9 +170,17 @@ class Pipeline:
         print(f"  [synthesis] Analyzing...")
 
         # Build sources dict from research_note
-        sources = {"research_note": task.get("research_note", "")}
+        # Note: research_note is text format, synthesis expects structured data
+        # For now, pass minimal structure to avoid breaking
+        sources = {
+            "research_note": task.get("research_note", ""),
+            "annotations": [],  # TODO: extract from research_note
+            "ddg_results": [],
+            "web_articles": [],
+            "topic_paragraphs": [],
+        }
 
-        synthesis = run_synthesis(sources, task["keyword"])
+        synthesis = run_synthesis(sources)
 
         if not synthesis or not synthesis.core_judgment:
             print(f"  [synthesis] SKIPPED: No core judgment formed")

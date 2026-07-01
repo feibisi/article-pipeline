@@ -66,6 +66,13 @@ class TaskDB:
             ALTER TABLE review_log ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
             ALTER TABLE review_feedback ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
         """),
+        # 003: Cascade layer intermediate outputs
+        (3, """
+            ALTER TABLE tasks ADD COLUMN synthesis TEXT;
+            ALTER TABLE tasks ADD COLUMN framework TEXT;
+            ALTER TABLE tasks ADD COLUMN prosody TEXT;
+            ALTER TABLE tasks ADD COLUMN compiled_prompt TEXT;
+        """),
     ]
 
     def _migrate(self):
@@ -172,9 +179,10 @@ class TaskDB:
         self.conn.commit()
 
     def save_stage_output(self, task_id: int, field: str, value: str):
-        """Save research_note, outline, article, or article_html to a task."""
+        """Save research_note, outline, article, cascade outputs, or meta to a task."""
         allowed = {"research_note", "outline", "article", "article_html",
-                   "title", "meta_description"}
+                   "title", "meta_description",
+                   "synthesis", "framework", "prosody", "compiled_prompt"}
         if field not in allowed:
             raise ValueError(f"Invalid field: {field}")
         c = self.conn.cursor()
