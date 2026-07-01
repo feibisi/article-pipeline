@@ -1,142 +1,90 @@
-"""Outline generation，Ollama first then DeepSeek API fallback."""
+"""Outline generation — 基于 FrameworkOutput 的方法论驱动生成.
+
+Phase 2 改造: 从 synthesis 的核心判断 + framework 的方法论结构生成 outline，
+而非使用固定模板。
+"""
 from article_pipeline.config import load_config
 import json
 import requests
 import yaml
 import os
+from typing import Optional
 
 import logging
 logger = logging.getLogger(__name__)
 
 
+# 基于 FrameworkOutput 的 outline prompt
+METHODOLOGY_DRIVEN_PROMPT = """你是一位资深内容编辑。任务：基于提供的核心判断和方法论结构，生成文章提纲。
 
-OUTLINE_PROMPT = """你是一位有观点、有立场的资深技术编辑。你的任务不是生成"关于X的介绍"，而是先想清楚你对这个话题的判断是什么，然后围绕这个判断搭建结构。
+## 核心判断（来自 Synthesis 层）
+{core_judgment}
 
-## 术语规范
-Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑器。Block Theme → 区块主题。
+## 证据概览
+### 支持判断的证据
+{evidence_for}
 
-## 关键词: {keyword}
-## 分类: {category}
-## 平台: {platform}
+### 反对或质疑的证据
+{evidence_against}
 
-## 研究素材:
-{research_note}
+### 素材间的矛盾
+{conflicts}
 
-## 第一步：根据文章类型先想清楚你要说什么
+### 独特主张（搜索结果找不到的）
+{unique_claims}
 
-分类 "{category}" 对应以下类型：
+## 方法论结构（来自 Framework 层）
+方法名: {method_name}
+方法论描述: {method_description}
 
-### 搜索型（tutorial/guide/troubleshooting/comparison/beginner/tool-review/listicle/resource-roundup）
-读者有明确问题，搜到你。直接给答案：
-- 为什么这件事重要？（给具体后果——不这么做会怎样？做了会怎样？）
-- 大多数人在这里的误解是什么？（没有误解，文章就没有存在的必要）
-- 你的核心判断是什么？（不许说"取决于情况""各有优劣"。选一个立场。）
-- 读这篇文章的人是谁？（具体处境+此刻痛点+想看什么）
+### 结构要求
+{structure_requirements}
 
-### 相遇型
-读者没在找你。先把他拉住，再给判断。所有相遇型必须有钩子。
+## 审美约束（来自 Style 层）
+{style_instructions}
 
-**opinion/trend**: 给一个他没想过的角度。
-- **钩子**：指出一个常见的错误认知或盲点。用具体数据或场景。
-- 你的核心判断是什么？
-- 读这篇文章的人是谁？
+## 语感参考（来自 Prosody 层）
+{prosody_hint}
 
-**marketing/brand-marketing**: 不是卖产品，是建认知。读者看完不买，但下次听到这个名字会觉得"这帮人懂行"。
-- **钩子**：这个行业有一个大家都忽视的盲点。具体指出来。
-- 为什么你关注这个盲点？（建立你说话的资格——不是因为你是专家，是因为你看到了具体的问题）
-- 读完这篇文章，读者应该带走的一个记忆点是什么？
+---
 
-**soft-article（软文）**: 伪装成搜索型的技术文章或对比文，结论自然指向你的方案。读者不应该在前三秒察觉是广告。
-- **钩子**：和搜索型一样——读者有真实问题，你认真回答。直到结论才揭晓你的产品是答案之一。
-- 解决问题的技术路径（客观、完整，不跳过竞争对手的方案）
-- 你的产品在这条路径的什么位置？（只占结论的一小段，不喧宾夺主）
+## 你的任务
 
-**product-launch**: 告诉用户一件事改变了。
-- **钩子**：之前他做不到什么（或很痛苦才能做到），今天开始不同了。
-- 改了什么？（用之前 vs. 之后对比，不是功能列表）
-- 怎么获取/开始？（具体路径）
-- 下一步是什么？（路线图预告）
+基于以上信息生成 outline，要求：
 
-**case-study**: 让他觉得"这个我也能做到"。
-- **钩子**：结果先行——优化前 X，现在 Y，中间经历了什么。
-- 踩坑过程（试了什么，为什么失败，怎么想通的）
-- 可复用的方法论（不只讲"这次做了什么"）
+1. **核心论点**：从 core_judgment 提炼，一句话说清你的判断
 
-**thought-leadership（思想领导力）**: 对行业趋势发表有立场的判断。
-- **钩子**：大家都说 X，但数据说的是另一回事。或：有一个信号所有人都忽略了。
-- 你的核心判断（必须有立场，不许和稀泥）
-- 支撑判断的数据/案例（至少两个独立来源）
+2. **段落结构**：严格遵循 methodology 结构要求
+   - 每个段落的 heading 参考 structure 的 h2_title
+   - 每个段落的 points 参考 structure 的 purpose
+   - 证据引用要与 evidence_for 呼应
 
-**editorial（社论/评论）**: 对最近的事件/新闻表态，立场要鲜明。
-- **钩子**：发生了什么事 + 为什么这件事不是表面看起来那么简单。
-- 你的立场（哪怕得罪人也要说清楚）
-- 为什么对立观点是错的（具体指出）
+3. **差异化说明**（必填）：
+   基于 unique_claims 和 conflicts，说明"这篇文章比搜索第一页的结果多给读者什么"。
+   必须包含具体信息（书名/数据/场景/反效果/无人提及），少于20字或缺乏具体信息会被拒绝。
 
-### 告知型（announcement/news）
-读者在关注更新。直接说事：
-- 什么变了？（一行说清）
-- 影响谁？（列具体人群，不在影响的也说明）
-- 要做什么？（给具体行动路径，不说"请联系客服"）
-- 什么时候生效？
-
-主张+读者（+钩子如果是相遇型），这些是整篇文章的锚。后面所有的结构、标题、素材引用都服务于它们。
-
-## 第二步，用一句话说清楚读者的收获
-
-写完上面的判断后，用一句话回答：
-
-**读者读完这篇文章后，能用一句什么话转述给朋友？**
-
-这句话必须：
-- 具体到可以直接引用（不是"关于 X 的一些建议"）
-- 包含一个判断或事实（不是"了解 X 的方方面面"）
-- 让没读文章的人也觉得有价值（不是"如何安装 X"）
-
-如果你写不出这句话，说明这个选题/角度不值得写。在 takeaway 字段写"SKIP: 无法提炼出有价值的一句话收获"。
-
-## 第三步，围绕主张搭建结构
-
-1. **主张**（从第一步来，3句话以内）
-
-2. **标题候选**（3个）:
-   - 标题A: 偏搜索友好
+4. **标题候选**（3个）:
+   - 标题A: 偏搜索友好（含关键词）
    - 标题B: 偏点击吸引力
    - 标题C: 偏专业/技术感
-   标题必须暗含主张。不许用"全面指南""深度解析""入门教程"等后缀——如果你的主张够强，标题不需要这些词。
+   标题必须暗含判断，不许用"全面指南""深度解析""入门教程"等后缀。
 
-3. **段落结构**（4-8个小标题 + 每段2-3句要点说明）
-   每段的存在理由是，它在论证主张的哪一部分？如果某段对论证主张没有贡献，删掉。
+5. **素材引用清单**: 研究素材中哪些可以嵌入哪些段落
 
-4. **素材引用清单**: 研究素材中哪些可以嵌入哪些段落
-
-5. **SEO 元数据**:
+6. **SEO 元数据**:
    - 目标关键词（首要 + 2-3个次要）
    - meta description 草稿（120-160字）
 
 请输出 JSON 格式（只输出 JSON，不要其他内容）:
 {{
-  "claim": {{
-    "why_matters": "...",
-    "common_misunderstanding": "...",
-    "core_judgment": "..."
-  }},
-  "hook": "相遇型必填。一句话——具体场景或数字，不是抽象陈述。告知型和搜索型可省略。",
-  "audience": "搜索型+相遇型必填。写清楚具体处境和此刻痛点，不要空泛标签。",
-  "takeaway": "一句话读者收获。具体、可引用、含判断或事实。无法提炼时写 \\"SKIP: 无法提炼出有价值的一句话收获\\"。",
-  "notification": {{
-    "what_changed": "告知型必填。一行说清什么变了",
-    "who_affected": "列具体人群，不在影响的也说明",
-    "what_to_do": "给具体行动路径",
-    "effective_date": "生效时间"
-  }},
-  "titles": [
-    {{"style": "seo", "text": "..."}},
-    {{"style": "clickbait", "text": "..."}},
-    {{"style": "professional", "text": "..."}}
-  ],
   "core_argument": "...",
+  "titles": [
+      {{"style": "seo", "text": "..."}},
+      {{"style": "clickbait", "text": "..."}},
+      {{"style": "professional", "text": "..."}}
+  ],
   "sections": [
-    {{"heading": "...", "points": ["...", "..."]}}
+      {{"heading": "...", "points": ["...", "..."], "purpose": "..."}}
   ],
   "material_map": [{{"section_index": 0, "source": "...", "usage": "..."}}],
   "seo": {{
@@ -144,12 +92,135 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
     "secondary_keywords": ["...", "..."],
     "meta_description": "..."
   }},
-  "differentiation": "必填。一句话描述'这篇文章比搜索第一页的结果多给读者什么'。必须包含具体信息（书名/数据/场景/反效果/无人提及），不能是泛泛而谈。示例：'基于 cocobook 3 本书的交叉对比，搜索结果都只引用了官方文档'；'包含 elementary 实测的性能数据，搜索结果都是理论描述'。少于20字或缺乏具体信息会被拒绝。"
+  "differentiation": "必填。一句话描述'这篇文章比搜索第一页的结果多给读者什么'。必须包含具体信息（书名/数据/场景/反效果/无人提及），少于20字或缺乏具体信息会被拒绝。"
 }}
 
-分类说明:
-- wp-tech: WordPress/Web 技术教程，面向开发者
-- book-knowledge: 书籍知识精华拆解，面向爱智求真的读者"""
+## 品类特殊说明
+{genre_specific_notes}
+"""
+
+
+def _format_framework_structure(structure: list[dict]) -> str:
+    """将 framework structure 格式化为 LLM 可读的文本."""
+    parts = []
+    for i, sec in enumerate(structure):
+        role = sec.get("role", "")
+        purpose = sec.get("purpose", "")
+        h2 = sec.get("h2_title", "")
+        word_budget = sec.get("word_budget", "")
+
+        parts.append(f"### 段落 {i+1}: {role}")
+        if h2:
+            parts.append(f"H2 标题建议: {h2}")
+        parts.append(f"目的: {purpose}")
+        if word_budget:
+            parts.append(f"字数预算: {word_budget}")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
+def _format_evidence(evidence: list[dict]) -> str:
+    """格式化证据列表."""
+    if not evidence:
+        return "（无）"
+
+    parts = []
+    for e in evidence[:5]:
+        source = e.get("source", "未知来源")
+        claim = e.get("claim", e.get("text", ""))
+        strength = e.get("strength", "")
+        parts.append(f"- {source}: {claim}")
+        if strength:
+            parts.append(f"  强度: {strength}")
+
+    return "\n".join(parts)
+
+
+def _get_genre_specific_notes(category: str) -> str:
+    """获取品类特定的补充说明."""
+    notes_map = {
+        "tutorial": """
+教程类特殊要求:
+- 开头必须用具体场景或问题引入，不要用"X 是..."的定义开头
+- 每个步骤后面必须有"不这样做会怎样"的说明
+- 必须包含验证步骤
+        """,
+        "comparison": """
+对比类特殊要求:
+- 必须给出明确的推荐条件（"如果...则选..."）
+- 对比维度要具体可测量，避免主观感受
+- 避免"各有优劣"，必须给出倾向性建议
+        """,
+        "opinion": """
+观点类特殊要求:
+- 必须有明确立场，不许和稀泥
+- 必须指出对立观点的具体错误
+- 钩子要具体（数据/场景），不能是抽象陈述
+        """,
+        "beginner": """
+新手类特殊要求:
+- 开头必须用具体场景，不要概念定义
+- 每次引入新组件都要说明"这是用来做什么的"
+- 不要假设读者理解了上下文
+        """,
+        "troubleshooting": """
+排查类特殊要求:
+- 必须从问题场景开头
+- 按诊断路径组织，不是按技术模块
+- 每个解决方案要有验证方法
+        """,
+        "brand-marketing": """
+品牌营销类特殊要求:
+- 不是卖产品，是建认知
+- 要指出行业盲点，建立"这帮人懂行"的印象
+- 读者应该带走一个记忆点
+        """,
+        "soft-article": """
+软文类特殊要求:
+- 前三秒不能察觉是广告
+- 技术路径要客观完整，不跳过竞争对手
+- 产品只在结论占一小段
+        """,
+        "product-launch": """
+产品发布类特殊要求:
+- 钩子：之前做不到什么，今天开始不同了
+- 用"之前 vs 之后"对比，不是功能列表
+- 给具体获取路径
+        """,
+        "case-study": """
+案例研究类特殊要求:
+- 结果先行：优化前 X，现在 Y
+- 要讲踩坑过程（试了什么，为什么失败）
+- 提炼可复用的方法论
+        """,
+        "thought-leadership": """
+思想领导力类特殊要求:
+- 必须有立场，不许"取决于情况"
+- 支撑判断至少两个独立来源
+- 要指出大家都忽略的信号
+        """,
+        "editorial": """
+社论类特殊要求:
+- 对事件表态，立场要鲜明
+- 指出对立观点的具体错误
+- 可以得罪人，但要说清楚
+        """,
+        "announcement": """
+公告类特殊要求:
+- 什么变了（一行说清）
+- 影响谁（列具体人群）
+- 要做什么（具体行动路径）
+- 什么时候生效
+        """,
+        "news": """
+新闻类特殊要求:
+- 事件概述（5W1H）
+- 背景和影响
+- 相关链接
+        """,
+    }
+    return notes_map.get(category, "")
 
 
 def _try_ollama(prompt: str, ollama_url: str, model: str) -> dict:
@@ -160,7 +231,7 @@ def _try_ollama(prompt: str, ollama_url: str, model: str) -> dict:
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": 0.3, "num_predict": 2048}
+            "options": {"temperature": 0.3, "num_predict": 4096}
         },
         timeout=120
     )
@@ -244,7 +315,7 @@ def _validate_differentiation(outline: dict) -> None:
 
     # 检查是否为空
     if not differentiation or not differentiation.strip():
-        raise ValueError(f"differentiation 字段为空或缺失")
+        raise ValueError("differentiation 字段为空或缺失")
 
     differentiation = differentiation.strip()
 
@@ -261,18 +332,125 @@ def _validate_differentiation(outline: dict) -> None:
 
     # 检查是否是空洞词汇
     empty_phrases = ["详细介绍", "深入分析", "全面解析", "全面介绍",
-                     "详细说明", "深度解读", " comprehensive "]
+                     "详细说明", "深度解读"]
     for phrase in empty_phrases:
         if phrase in differentiation.lower():
             raise ValueError(f"differentiation 包含空洞词汇: {differentiation}")
 
 
+def generate_outline_from_layers(
+    keyword: str,
+    category: str,
+    platform: str,
+    synthesis_output: dict,
+    framework_output: dict,
+    style_output: Optional[dict] = None,
+    prosody_output: Optional[dict] = None,
+) -> dict:
+    """基于层级输出生成 outline（Phase 2 改造版）.
+
+    Args:
+        keyword: 关键词
+        category: 品类
+        platform: 平台
+        synthesis_output: Synthesis 层输出（或兼容格式的 dict）
+        framework_output: Framework 层输出（或兼容格式的 dict）
+        style_output: Style 层输出（可选）
+        prosody_output: Prosody 层输出（可选）
+
+    Returns:
+        outline dict（与旧格式兼容）
+    """
+    # 提取 synthesis 内容
+    core_judgment = synthesis_output.get("core_judgment", "")
+    evidence_for = _format_evidence(synthesis_output.get("evidence_for", []))
+    evidence_against = _format_evidence(synthesis_output.get("evidence_against", []))
+    conflicts_list = synthesis_output.get("conflicts", [])
+    conflicts = "\n".join([
+        f"- {c.get('source_a', '')} vs {c.get('source_b', '')}: {c.get('resolution', '')}"
+        for c in conflicts_list
+    ]) if conflicts_list else "（无矛盾）"
+    unique_claims = "\n".join([
+        f"- {uc}" for uc in synthesis_output.get("unique_claims", [])
+    ]) if synthesis_output.get("unique_claims") else "（无独特主张）"
+
+    # 提取 framework 内容
+    method_name = framework_output.get("method", "generic")
+    method_desc = framework_output.get("freeform_note", "")
+    structure = framework_output.get("structure", [])
+    structure_requirements = _format_framework_structure(structure)
+
+    # 提取 style 内容
+    style_instructions = ""
+    if style_output:
+        constraints = style_output.get("constraints", {})
+        require = constraints.get("require", [])
+        avoid = constraints.get("avoid", [])
+        if require or avoid:
+            style_instructions = "### 必须做到\n" + "\n".join([f"- {r}" for r in require])
+            if avoid:
+                style_instructions += "\n### 避免出现\n" + "\n".join([f"- {a}" for a in avoid])
+    else:
+        style_instructions = "（无特定约束）"
+
+    # 提取 prosody 内容
+    prosody_hint = ""
+    if prosody_output:
+        prosody_hint = prosody_output.get("rhythm_hint", "")
+    else:
+        prosody_hint = "（无特定语感要求）"
+
+    # 品类特殊说明
+    genre_specific = _get_genre_specific_notes(category)
+
+    # 组装 prompt
+    prompt = METHODOLOGY_DRIVEN_PROMPT.format(
+        core_judgment=core_judgment or "（未提供核心判断）",
+        evidence_for=evidence_for,
+        evidence_against=evidence_against,
+        conflicts=conflicts,
+        unique_claims=unique_claims,
+        method_name=method_name,
+        method_description=method_desc,
+        structure_requirements=structure_requirements,
+        style_instructions=style_instructions,
+        prosody_hint=prosody_hint,
+        genre_specific_notes=genre_specific,
+    )
+
+    # 尝试生成
+    result = _try_api(prompt)
+    if "error" not in result:
+        _validate_differentiation(result)
+        return result
+
+    # Fallback: Ollama
+    config = load_config()
+    ollama = config.get("ollama", {})
+    ollama_url = ollama.get("base_url", "http://localhost:11434")
+    model = ollama.get("outline_model", "gemma3:12b")
+
+    try:
+        result = _try_ollama(prompt, ollama_url, model)
+        if "error" not in result:
+            _validate_differentiation(result)
+        return result
+    except (requests.ConnectionError, requests.Timeout, requests.RequestException, json.JSONDecodeError):
+        pass
+
+    return {"error": "all_providers_failed",
+            "message": "Both Ollama and API failed to generate outline"}
+
+
 def generate_outline(keyword: str, category: str, platform: str,
                      research_note: str) -> dict:
-    """Generate an article outline，tries Ollama first then falls back to API."""
+    """兼容旧接口的 outline 生成（回退到模板方式）.
+
+    注意：新代码应使用 generate_outline_from_layers()。
+    本函数仅为保持向后兼容而保留。
+    """
     config = load_config()
 
-    # TIER_EXTERNAL categories get more research context for outline generation
     cat_lower = category.lower().strip() if category else ""
     tier_external_categories = {
         "product-launch", "announcement", "brand-marketing",
@@ -281,28 +459,52 @@ def generate_outline(keyword: str, category: str, platform: str,
     }
     outline_char_limit = 4000 if cat_lower in tier_external_categories else 2000
 
-    prompt = OUTLINE_PROMPT.format(
+    # 使用简化版模板（保留旧版逻辑）
+    TEMPLATE_PROMPT = """你是一位资深内容编辑。任务：为以下关键词生成文章提纲。
+
+## 关键词: {keyword}
+## 分类: {category}
+## 平台: {platform}
+
+## 研究素材:
+{research_note}
+
+请输出 JSON 格式的 outline，包含：
+- core_argument: 核心论点
+- titles: 3 个标题候选
+- sections: 段落结构
+- material_map: 素材引用
+- seo: SEO 元数据
+- differentiation: 差异化说明（必填，20字以上，含具体信息）
+
+{{
+  "core_argument": "...",
+  "titles": [{{"style": "seo", "text": "..."}}, ...],
+  "sections": [{{"heading": "...", "points": ["..."]}}, ...],
+  "material_map": [{{"section_index": 0, "source": "...", "usage": "..."}}],
+  "seo": {{}}
+  "differentiation": "..."
+}}
+"""
+
+    prompt = TEMPLATE_PROMPT.format(
         keyword=keyword,
         category=category,
         platform=platform,
         research_note=research_note[:outline_char_limit]
     )
 
-    # Try DeepSeek API first (ANTHROPIC_AUTH_TOKEN configures Anthropic-compatible endpoint)
     result = _try_api(prompt)
     if "error" not in result:
-        # 验证 differentiation 字段
         _validate_differentiation(result)
         return result
 
-    # Fallback: Ollama
     ollama = config.get("ollama", {})
     ollama_url = ollama.get("base_url", "http://localhost:11434")
     model = ollama.get("outline_model", "gemma3:12b")
 
     try:
         result = _try_ollama(prompt, ollama_url, model)
-        # 验证 differentiation 字段
         if "error" not in result:
             _validate_differentiation(result)
         return result
@@ -336,6 +538,8 @@ def format_outline_for_review(outline: dict) -> str:
     lines.append("\n### 段落结构")
     for i, sec in enumerate(outline.get("sections", [])):
         lines.append(f"\n**{i+1}. {sec.get('heading', '')}**")
+        if sec.get('purpose'):
+            lines.append(f"目的: {sec['purpose']}")
         for pt in sec.get("points", []):
             lines.append(f"  - {pt}")
 
@@ -348,15 +552,12 @@ def format_outline_for_review(outline: dict) -> str:
     lines.append(f"- 首要关键词: {seo.get('primary_keyword', 'N/A')}")
     lines.append(f"- 次要关键词: {', '.join(seo.get('secondary_keywords', []))}")
     lines.append(f"- Meta: {seo.get('meta_description', 'N/A')}")
-    lines.append(f"- 内链机会: {', '.join(seo.get('internal_link_opportunities', []))}")
 
     return "\n".join(lines)
 
 
 def test_differentiation_validation():
     """测试 differentiation 门控逻辑。"""
-    import pytest
-
     # 合法案例（应该通过）
     valid_cases = [
         "基于 cocobook 3 本书的交叉对比，搜索结果都只引用了官方文档",

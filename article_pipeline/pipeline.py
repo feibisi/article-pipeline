@@ -429,13 +429,69 @@ class Pipeline:
         return {"task_id": task_id, "stage": "compile", "prompt_length": len(compile_output.markdown)}
 
     def process_outline(self, task_id: int) -> dict | None:
-        """Stage 3: Generate outline from research."""
-        task = self.db.get_task(task_id)
-        print(f"  [outline] Generating...")
+        """Stage 5.5: Generate outline from layer outputs（Phase 2 改造版）.
 
-        outline = generate_outline(
-            task["keyword"], task["category"], task["platform"],
-            task["research_note"] or ""
+        现在 outline 基于 synthesis + framework + style + prosody 的输出生成，
+        而非从 research_note 直接生成。
+        """
+        task = self.db.get_task(task_id)
+        print(f"  [outline] Generating from layers...")
+
+        # Load all layer outputs
+        import json as _j
+        synthesis_data = _j.loads(task.get("synthesis", "{}"))
+        framework_data = _j.loads(task.get("framework", "{}"))
+        prosody_data = _j.loads(task.get("prosody", "{}"))
+
+        # Build style output from preset
+        from article_pipeline.style import get_preset_dict, render_temperament
+        from article_pipeline.contracts import StyleOutput, ProsodyOutput
+        genre = self._map_category_to_genre(task["category"])
+        style_dict = get_preset_dict(genre)
+
+        # Generate constraints from Phase 4 rules
+        from article_pipeline.style_phase4 import render_genre_rules
+        rules = render_genre_rules(task["category"])
+        constraints = {"require": [], "avoid": []}
+        for rule_type, rule_list in rules.items():
+            if rule_type in ["sentence", "rhythm", "stance", "structure", "data"]:
+                constraints["require"].extend(rule_list)
+
+        style_vector_dict = {
+            "density": style_dict.get("density", 0.0),
+            "warmth": style_dict.get("warmth", 0.0),
+            "energy": style_dict.get("energy", 0.0),
+            "register": style_dict.get("register", 0.0),
+            "edge": style_dict.get("edge", 0.0),
+            "injection": style_dict.get("injection", "full"),
+            "active": style_dict.get("active", True),
+        }
+
+        style_output = {
+            "vector": style_vector_dict,
+            "constraints": constraints,
+            "rendered_instructions": "",
+            "aesthetic_concepts": [],
+        }
+
+        prosody_output = {
+            "samples": prosody_data.get("samples", []),
+            "sample_type": prosody_data.get("sample_type", ""),
+            "negative_constraints": prosody_data.get("negative_constraints", ""),
+            "rhythm_hint": prosody_data.get("rhythm_hint", ""),
+            "freeform_note": prosody_data.get("freeform_note", ""),
+        }
+
+        # Generate outline from layers
+        from article_pipeline.outline import generate_outline_from_layers
+        outline = generate_outline_from_layers(
+            keyword=task["keyword"],
+            category=task["category"],
+            platform=task["platform"],
+            synthesis_output=synthesis_data,
+            framework_output=framework_data,
+            style_output=style_output,
+            prosody_output=prosody_output,
         )
 
         if "error" in outline:
