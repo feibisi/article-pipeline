@@ -33,6 +33,12 @@ from article_pipeline.topic_filter import (
     BenchmarkFilterResult,
     TopicFilter,
 )
+from article_pipeline.review.dbs_resonate import (
+    ResonanceChecker,
+    ResonanceReport,
+    check_resonance,
+    generate_resonance_report,
+)
 
 # ────────────────────────────────────────────────────────────────────
 # Existing checks (word count, format, facts, fabrication, semantic)
@@ -896,6 +902,36 @@ def generate_topic_filter_report(keyword: str,
     """
     bf = BenchmarkTopicFilter(search_results=search_results or [])
     return bf.generate_report(keyword, category)
+
+
+# ────────────────────────────────────────────────────────────────────
+# Draft resonance check — dbs-resonate inspired 5-dimension diagnosis
+# ────────────────────────────────────────────────────────────────────
+
+def check_draft_resonance(draft: str, category: str = "") -> ResonanceReport:
+    """文稿共鸣诊断
+
+    Args:
+        draft: 文稿内容
+        category: 分类
+
+    Returns:
+        ResonanceReport
+    """
+    return check_resonance(draft, category)
+
+
+def generate_resonance_diagnosis_report(draft: str, category: str = "") -> str:
+    """生成文稿共鸣诊断报告
+
+    Args:
+        draft: 文稿内容
+        category: 分类
+
+    Returns:
+        Markdown 格式的报告
+    """
+    return generate_resonance_report(draft, category)
 
 
 # ────────────────────────────────────────────────────────────────────
