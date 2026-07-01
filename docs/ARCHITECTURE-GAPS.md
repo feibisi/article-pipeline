@@ -1087,6 +1087,9 @@ visual_anchors: list[dict] | None = None
   - 风格系统（5 维坐标）→ 应解耦为通用创作人格层
   - review 模块（10 维评分）→ 应加正向质量信号
   - writing_craft 范本 → 应按层分类使用（方法论/结构/语感）
+  - archify 渲染器（本地 Node.js）→ 技术图确定性生成
+  - Pinchtab + headless Chrome → 截图作为证据
+  - Studio 图像生成能力（3 后端）→ 创作性配图
 
 缺失（需新建）：
   - synthesis 模块 — 从碎片形成结构化理解
@@ -1094,6 +1097,21 @@ visual_anchors: list[dict] | None = None
   - prosody 模块 — 独立于风格的语感控制
   - style_adapter — 风格坐标到格式专属指令的翻译层
   - creative-core 共享库 — 风格/知识/LLM/质量的通用层
+  - visual.py — 素材请求编排（VisualBrief → archify/Studio/Pinchtab）
+  - compile 结构化输出 — JSON 元数据（SEO/visual_anchors/tags）
+
+架构模型：
+  - 级联编译 5 层（synthesis → framework → style → prosody → compile）
+  - 双轨约束：硬约束（工程层，保底线 3→7）+ 软约束（创作层，提上限 7→9）
+  - 可插拔品类域（21 品类 × 5 文件契约，新增品类 = 放目录不改代码）
+  - 多 LLM 供应商（DeepSeek/GLM/Claude），成本不是约束
+
+素材策略：
+  - 技术图（archify，工程/确定性/本地）
+  - 内容配图（Studio prompts + image-gen，创作/异步）
+  - 截图证据（Pinchtab，工程/本地）
+  - 数据图表（gnuplot/matplotlib，工程/本地）
+  - xiaohei-scenes → Studio prompts 新 domain
 
 方向（长期）：
   - 独立管线 + 共享核心库（Studio 已验证的模式）
