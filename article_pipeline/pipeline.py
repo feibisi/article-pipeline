@@ -347,14 +347,39 @@ class Pipeline:
             freeform_note=prosody_data.get("freeform_note", ""),
         )
 
-        # Get style preset
-        from article_pipeline.style import get_preset_dict
+        # Phase 4: Get style preset and generate dynamic rules
+        from article_pipeline.style import get_preset, render_temperament
+        from article_pipeline.style_phase4 import render_genre_rules
         genre = self._map_category_to_genre(task["category"])
-        style_dict = get_preset_dict(genre)
+        style_vector = get_preset(genre)
+        style_dict = {
+            "density": style_vector.density,
+            "warmth": style_vector.warmth,
+            "energy": style_vector.energy,
+            "register": style_vector.register,
+            "edge": style_vector.edge,
+            "injection": style_vector.injection,
+            "active": style_vector.active,
+        }
+
+        # Generate dynamic rules from style vector
+        rules = render_genre_rules(task["category"])
+
+        # Convert Phase 4 rules to constraints dict
+        # Phase 4 规则都是正向要求，统一放入 require
+        constraints = {"require": [], "avoid": []}
+        for rule_type, rule_list in rules.items():
+            if rule_type in ["sentence", "rhythm", "stance", "structure", "data"]:
+                constraints["require"].extend(rule_list)
+
+        # Add temperament description
+        temperament_list = render_temperament(style_vector)
+        temperament = "\n".join(temperament_list) if temperament_list else ""
+
         style = StyleOutput(
             vector=style_dict,
-            constraints={},  # Constraints from genre rules, not style vector
-            rendered_instructions="",
+            constraints=constraints,
+            rendered_instructions=temperament,
             aesthetic_concepts=[],
         )
 
