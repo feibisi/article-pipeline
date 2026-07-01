@@ -1,0 +1,59 @@
+# Tutorial Framework — 教程品类方法论
+
+name: cognitive_scaffold
+display_name: 认知脚手架
+description: |
+  教程品类的方法论核心是"认知脚手架"——先搭建读者已有的知识，
+  再逐步引入新概念，每一步都有具体操作和即时反馈。
+
+  教程不是知识传递，是技能建构。读者需要的是"能做什么"，
+  而不是"知道什么"。
+
+principles:
+  - "从问题到解决方案，不是从概念到应用"
+  - "每一步操作都要说明'不这样做会怎样'"
+  - "代码块后面必须跟一句人话解释"
+  - "用具体场景开头，不用概念定义"
+
+structure:
+  - role: opening
+    purpose: "用具体场景或问题开头，激活读者痛点"
+    word_budget: "100-200"
+    pattern: "场景描述 + 痛点放大 + 承诺解决"
+    h2_title: "问题场景"
+
+  - role: diagnosis
+    purpose: "诊断问题原因，建立读者对解决方案的信任"
+    word_budget: "150-300"
+    pattern: "可能的原因排查 + 根本原因定位"
+    h2_title: "为什么会出现这个问题"
+
+  - role: solution
+    purpose: "给出具体解决方案，每步可验证"
+    word_budget: "400-800"
+    pattern: "步骤列表 + 每步解释 + 验证方法"
+    h2_title: "解决方法"
+
+  - role: verification
+    purpose: "教读者验证解决方案是否生效"
+    word_budget: "100-200"
+    pattern: "验证清单 + 常见错误排查"
+    h2_title: "如何验证"
+
+  - role: troubleshooting
+    purpose: "预判常见问题，降低踩坑概率"
+    word_budget: "150-300"
+    pattern: "常见错误 + 解决方法 + 避坑建议"
+    h2_title: "常见问题"
+
+anti_patterns:
+  - "不要用概念定义开头（'Shortcode 是...'）"
+  - "不要用'首先...其次...最后...'结构"
+  - "不要假设读者理解了上下文，每次引入新组件都要说明"
+  - "不要省略验证步骤"
+
+quality_gates:
+  - "开头必须有具体场景或问题"
+  - "每个代码块后面必须有人话解释"
+  - "每步操作都要说明'不这样做会怎样'"
+  - "必须有验证步骤"

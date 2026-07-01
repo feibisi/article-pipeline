@@ -1,0 +1,59 @@
+# Opinion Framework — 观点品类方法论
+
+name: stance_elaboration
+display_name: 立场展开
+description: |
+  观点品类的方法论核心是"立场展开"——从一个明确的判断出发，
+  逐层展开支撑理由，同时预判反驳并回应。
+
+  观点文的价值不在于"正确"，而在于"有角度"。
+  平衡的论述是平庸的，有效的立场是鲜明的。
+
+principles:
+  - "开篇给出明确判断，不是'让我们来探讨'"
+  - "每个支撑段落要有具体证据，不是泛泛而谈"
+  - "预判反驳并回应，不要假装反面观点不存在"
+  - "结尾要有行动指向，不是'各有利弊'"
+
+structure:
+  - role: opening
+    purpose: "抛出明确判断，吸引认同者"
+    word_budget: "100-200"
+    pattern: "直接判断 + 简短理由 + 价值承诺"
+    h2_title: "核心观点"
+
+  - role: rationale
+    purpose: "展开支撑理由的第一层"
+    word_budget: "200-400"
+    pattern: "理由1 + 证据 + 分析"
+    h2_title: "为什么这么说"
+
+  - role: evidence
+    purpose: "给出具体案例或数据支撑"
+    word_budget: "300-500"
+    pattern: "案例描述 + 数据支撑 + 与观点的关联"
+    h2_title: "证据支撑"
+
+  - role: counter_argument
+    purpose: "预判反驳并回应"
+    word_budget: "200-400"
+    pattern: "反面观点 + 承认合理部分 + 为什么仍坚持原判断"
+    h2_title: "可能的质疑"
+
+  - role: implication
+    purpose: "说明观点的实际含义和行动指向"
+    word_budget: "150-300"
+    pattern: "这意味着什么 + 应该怎么做"
+    h2_title: "这意味着"
+
+anti_patterns:
+  - "不要用'让我们来探讨'开篇"
+  - "不要'各有道理'结尾而不给结论"
+  - "不要堆砌名言而不展开分析"
+  - "不要预判反驳但只是简单否认"
+
+quality_gates:
+  - "开篇必须有明确判断（不是问句）"
+  - "至少有两个支撑理由"
+  - "必须有预判反驳的段落"
+  - "结尾要有行动指向"

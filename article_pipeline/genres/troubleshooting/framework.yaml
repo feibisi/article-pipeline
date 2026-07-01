@@ -1,0 +1,59 @@
+# Troubleshooting Framework — 故障排查品类方法论
+
+name: diagnostic_tree
+display_name: 诊断树
+description: |
+  故障排查品类的方法论核心是"诊断树"——按症状分组，
+  逐步缩小问题范围，最终定位根因并给出解决方案。
+
+  读者来不是为了"学习"，是为了"解决"。
+  文章的价值在于快速缩小排查范围。
+
+principles:
+  - "按症状分组，不是按组件分组"
+  - "每一步排查都要说明'如果...则...如果...则...'"
+  - "给出最快验证路径，不是穷举所有可能"
+  - "解决方案要包含根因修复，不是临时绕过"
+
+structure:
+  - role: opening
+    purpose: "明确故障现象和影响范围"
+    word_budget: "100-150"
+    pattern: "故障描述 + 影响范围 + 本文能解决什么"
+    h2_title: "故障现象"
+
+  - role: quick_checks
+    purpose: "列出最常见的原因和快速验证方法"
+    word_budget: "150-250"
+    pattern: "常见原因1 + 验证方法 + 常见原因2 + ..."
+    h2_title: "先检查这些"
+
+  - role: diagnostic_path
+    purpose: "给出诊断路径，逐步缩小范围"
+    word_budget: "300-600"
+    pattern: "如果A则...，如果B则...，如果C则..."
+    h2_title: "逐步排查"
+
+  - role: root_cause
+    purpose: "定位根本原因"
+    word_budget: "200-400"
+    pattern: "根因分析 + 为什么会产生这个问题"
+    h2_title: "根本原因"
+
+  - role: solution
+    purpose: "给出解决方案和预防方法"
+    word_budget: "200-400"
+    pattern: "修复步骤 + 验证方法 + 如何预防"
+    h2_title: "解决方案"
+
+anti_patterns:
+  - "不要穷举所有可能，要给出诊断路径"
+  - "不要只给临时绕过方案"
+  - - "不要假设读者有专业工具"
+  - "不要省略验证步骤"
+
+quality_gates:
+  - "必须有快速检查清单"
+  - "必须给出诊断路径（如果...则...）"
+  - "必须包含根本原因分析"
+  - "必须包含预防方法"

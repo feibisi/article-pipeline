@@ -1,0 +1,31 @@
+anti_patterns:
+- 不要没有明确观点
+- 不要段落之间缺乏逻辑连接
+- 不要只有抽象概念没有具体例子
+description: 基础文章结构，待补充品类特定方法论
+display_name: 通用结构
+name: generic_structure
+principles:
+- 给出清晰的价值主张
+- 结构明确，段落之间有逻辑连接
+- 用具体例子支撑抽象观点
+quality_gates:
+- 必须有明确的价值主张
+- 段落之间必须有逻辑连接
+- 必须有具体例子支撑
+structure:
+- h2_title: 背景
+  pattern: 背景 + 价值承诺
+  purpose: 引入话题，说明价值
+  role: opening
+  word_budget: 100-200
+- h2_title: 正文
+  pattern: 观点 + 证据 + 分析
+  purpose: 展开论述
+  role: body
+  word_budget: 600-1200
+- h2_title: 总结
+  pattern: 总结 + 行动建议
+  purpose: 总结要点
+  role: conclusion
+  word_budget: 100-150

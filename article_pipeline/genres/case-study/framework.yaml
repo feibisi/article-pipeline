@@ -1,0 +1,65 @@
+# Case Study Framework — 案例研究品类方法论
+
+name: narrative_arc
+display_name: 叙事弧线
+description: |
+  案例研究品类的方法论核心是"叙事弧线"——用故事结构
+  呈现问题→决策→执行→结果的完整过程。
+
+  案例不是技术总结，是决策过程的还原。
+  读者关心的是"在那种情况下怎么想的"，不是"用了什么技术"。
+
+principles:
+  - "还原决策过程，不是只讲结果"
+  - "说明约束条件（时间、资源、技术栈限制）"
+  - "坦诚失败的尝试，不是事后诸葛亮"
+  - "给出可复用的经验，不是特定场景的炫耀"
+
+structure:
+  - role: opening
+    purpose: "快速介绍案例背景和核心结论"
+    word_budget: "100-150"
+    pattern: "背景一句话 + 核心结论 + 阅读收获"
+    h2_title: "案例背景"
+
+  - role: context
+    purpose: "详细说明约束条件和初始状态"
+    word_budget: "200-400"
+    pattern: "技术栈 + 团队情况 + 业务约束 + 初始问题"
+    h2_title: "约束条件"
+
+  - role: challenge
+    purpose: "描述具体挑战和失败尝试"
+    word_budget: "300-500"
+    pattern: "遇到了什么 + 尝试了什么 + 为什么不行"
+    h2_title: "面临的挑战"
+
+  - role: decision
+    purpose: "还原关键决策过程"
+    word_budget: "300-500"
+    pattern: "关键决策点 + 备选方案 + 为什么选这个"
+    h2_title: "关键决策"
+
+  - role: execution
+    purpose: "说明实施过程和调整"
+    word_budget: "300-500"
+    pattern: "实施步骤 + 遇到的新问题 + 如何调整"
+    h2_title: "实施过程"
+
+  - role: outcome
+    purpose: "呈现最终结果和可复用经验"
+    word_budget: "200-400"
+    pattern: "量化结果 + 经验提炼 + 适用场景"
+    h2_title: "结果与经验"
+
+anti_patterns:
+  - "不要事后诸葛亮，坦诚当时的困惑"
+  - "不要省略失败的尝试"
+  - "不要只讲技术不讲业务背景"
+  - "不要'仅供参考'而不给出适用场景"
+
+quality_gates:
+  - "必须说明约束条件"
+  - "必须包含失败的尝试"
+  - "必须还原决策过程（为什么选A而不是B）"
+  - "必须给出可复用经验"

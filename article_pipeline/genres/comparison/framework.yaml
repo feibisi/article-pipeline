@@ -1,0 +1,57 @@
+# Comparison Framework — 对比品类方法论
+
+name: decision_matrix
+display_name: 决策矩阵
+description: |
+  对比品类的方法论核心是"决策矩阵"——帮助读者在多个选项中做出选择。
+
+  不是简单的优缺点列表，而是基于场景的决策框架。
+  读者需要的是"在什么情况下选哪个"，而不是"哪个更好"。
+
+principles:
+  - "按使用场景分组，不是按产品特性分组"
+  - "给出明确的推荐条件（如果...则选...）"
+  - "避免'平分秋色'，必须给出倾向性建议"
+  - "对比维度要具体可测量，不是主观感受"
+
+structure:
+  - role: opening
+    purpose: "明确读者面临的决策场景"
+    word_budget: "100-150"
+    pattern: "决策场景 + 约束条件 + 本文承诺"
+    h2_title: "决策背景"
+
+  - role: criteria
+    purpose: "定义对比维度和评估标准"
+    word_budget: "150-250"
+    pattern: "关键维度列表 + 为什么这些维度重要"
+    h2_title: "评估维度"
+
+  - role: comparison
+    purpose: "按维度对比各选项，给出数据支撑"
+    word_budget: "400-700"
+    pattern: "维度1对比 + 维度2对比 + ... + 数据来源"
+    h2_title: "详细对比"
+
+  - role: recommendation
+    purpose: "给出明确的推荐决策矩阵"
+    word_budget: "200-400"
+    pattern: "场景1推荐 + 场景2推荐 + ... + 理由"
+    h2_title: "推荐决策"
+
+  - role: conclusion
+    purpose: "总结核心决策点，给出行动建议"
+    word_budget: "100-150"
+    pattern: "一句话总结 + 下一步行动"
+    h2_title: "如何选择"
+
+anti_patterns:
+  - "不要'各有优劣'然后不给建议"
+  - "不要用主观形容词（'很快''很稳'）代替数据"
+  - "不要忽略价格、学习成本等实际约束"
+  - "不要假设读者只有一种使用场景"
+
+quality_gates:
+  - "必须有明确的推荐条件（如果...则选...）"
+  - "对比维度必须可测量或可验证"
+  - "必须给出行动建议"

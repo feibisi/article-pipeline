@@ -856,6 +856,8 @@ def run_self_review(article: str, tier: str = "A",
             dim: {"humanizer_dim": hz_dim, "style_value": getattr(style_vec, dim)}
             for dim, hz_dim in STYLE_TO_HUMANIZER.items()
         }
+        # 注意：style_humanizer_map 是参考映射（非因果关系）
+        # 维度名称相似不代表风格指令会直接影响 humanizer 评分
 
     # Hard gate: "不是...而是..." — rate-based, genre-adjusted.
     # Opinion/comparison pieces naturally use contrast patterns; tutorials less so.
