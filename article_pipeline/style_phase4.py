@@ -1,9 +1,9 @@
 """文风格调系统 Phase 4 — 用 5 维坐标替换 genre rules if-else
 
-核心思想：
-1. 不再硬编码品类规则，而是根据 style 坐标动态生成
-2. 每个品类有一个 style preset（已有），从 preset 推导规则
-3. 规则分为：句式规则、节奏规则、姿态规则
+核心设计思路：
+1. 不再硬编码品类规则，而是根据 style 坐标动态生成，
+2. 每个品类有一个 style preset（已有），从 preset 推导规则，
+3. 规则分为句式规则、节奏规则、姿态规则
 """
 
 from article_pipeline.style import StyleVector, render_temperament
@@ -15,7 +15,7 @@ RuleType = Literal["sentence", "rhythm", "stance", "structure", "data"]
 
 
 def _render_sentence_rules(vector: StyleVector) -> list[str]:
-    """从 density + register 推导句式规则"""
+    """从 density 与 register 推导句式规则"""
     rules = []
 
     # density → 句子长度
@@ -42,7 +42,7 @@ def _render_sentence_rules(vector: StyleVector) -> list[str]:
 
 
 def _render_rhythm_rules(vector: StyleVector) -> list[str]:
-    """从 energy + density 推导节奏规则"""
+    """从 energy 与 density 推导节奏规则"""
     rules = []
 
     # energy → 节奏类型
@@ -65,7 +65,7 @@ def _render_rhythm_rules(vector: StyleVector) -> list[str]:
 
 
 def _render_stance_rules(vector: StyleVector) -> list[str]:
-    """从 warmth + edge 推导姿态规则"""
+    """从 warmth 与 edge 推导姿态规则"""
     rules = []
 
     # warmth → 叙述姿态
@@ -88,7 +88,7 @@ def _render_stance_rules(vector: StyleVector) -> list[str]:
 
 
 def _render_structure_rules(vector: StyleVector, category: str = "") -> list[str]:
-    """从品类 + density 推导结构规则"""
+    """从品类与 density 推导结构规则"""
     rules = []
 
     # 品类特定规则（从 genre_rules 提炼）
@@ -109,7 +109,7 @@ def _render_structure_rules(vector: StyleVector, category: str = "") -> list[str
 
 
 def _render_data_rules(vector: StyleVector) -> list[str]:
-    """从 edge + warmth 推导数据使用规则"""
+    """从 edge 与 warmth 推导数据使用规则"""
     rules = []
 
     # edge → 数据呈现

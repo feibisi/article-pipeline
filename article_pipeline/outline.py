@@ -1,4 +1,4 @@
-"""Outline generation — Ollama first, DeepSeek API fallback."""
+"""Outline generation，Ollama first then DeepSeek API fallback."""
 from article_pipeline.config import load_config
 import json
 import requests
@@ -22,7 +22,7 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
 ## 研究素材:
 {research_note}
 
-## 第一步：根据文章类型，先想清楚你要说什么
+## 第一步：根据文章类型先想清楚你要说什么
 
 分类 "{category}" 对应以下类型：
 
@@ -81,7 +81,7 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
 
 主张+读者（+钩子如果是相遇型），这些是整篇文章的锚。后面所有的结构、标题、素材引用都服务于它们。
 
-## 第二步：用一句话说清楚读者的收获
+## 第二步，用一句话说清楚读者的收获
 
 写完上面的判断后，用一句话回答：
 
@@ -94,7 +94,7 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
 
 如果你写不出这句话，说明这个选题/角度不值得写。在 takeaway 字段写"SKIP: 无法提炼出有价值的一句话收获"。
 
-## 第三步：围绕主张搭建结构
+## 第三步，围绕主张搭建结构
 
 1. **主张**（从第一步来，3句话以内）
 
@@ -105,7 +105,7 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
    标题必须暗含主张。不许用"全面指南""深度解析""入门教程"等后缀——如果你的主张够强，标题不需要这些词。
 
 3. **段落结构**（4-8个小标题 + 每段2-3句要点说明）
-   每段的存在理由是——它在论证主张的哪一部分？如果某段对论证主张没有贡献，删掉。
+   每段的存在理由是，它在论证主张的哪一部分？如果某段对论证主张没有贡献，删掉。
 
 4. **素材引用清单**: 研究素材中哪些可以嵌入哪些段落
 
@@ -153,7 +153,7 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
 
 
 def _try_ollama(prompt: str, ollama_url: str, model: str) -> dict:
-    """Try generating via Ollama. Returns result dict or raises on error."""
+    """Try generating via Ollama，returns result dict or raises on error."""
     resp = requests.post(
         f"{ollama_url}/api/generate",
         json={
@@ -176,7 +176,7 @@ def _try_ollama(prompt: str, ollama_url: str, model: str) -> dict:
 
 
 def _try_api(prompt: str) -> dict:
-    """Generate outline via API. Tries primary (GLM/z.ai), falls back to DeepSeek."""
+    """Generate outline via API，tries primary (GLM/z.ai) then falls back to DeepSeek."""
     config = load_config()
     ds = config.get("deepseek", {})
 
@@ -239,7 +239,7 @@ def _try_api(prompt: str) -> dict:
 
 
 def _validate_differentiation(outline: dict) -> None:
-    """检查 differentiation 是否足够具体。不够则警告或抛出错误。"""
+    """检查 differentiation 是否足够具体，不够则警告或抛出错误。"""
     differentiation = outline.get("differentiation", "")
 
     # 检查是否为空
@@ -269,7 +269,7 @@ def _validate_differentiation(outline: dict) -> None:
 
 def generate_outline(keyword: str, category: str, platform: str,
                      research_note: str) -> dict:
-    """Generate an article outline. Tries Ollama first, falls back to API."""
+    """Generate an article outline，tries Ollama first then falls back to API."""
     config = load_config()
 
     # TIER_EXTERNAL categories get more research context for outline generation

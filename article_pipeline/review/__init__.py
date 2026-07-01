@@ -1,8 +1,8 @@
-"""Self-review module — fact check, AI detection, format, word count, semantic verification.
+"""Self-review module，fact check，AI detection，format，word count，semantic verification.
 
-V2: Integrated Humanizer-zh 24 patterns + 5-dimension quality scoring.
-Sources: CSDN AI味词库, Wikipedia "AI生成文的特征", Humanizer-zh (WikiProject AI Cleanup),
-         53ai.com / Hello-SimpleAI / translate VM patterns, community observations.
+V2: Integrated Humanizer-zh 24 patterns plus 5-dimension quality scoring.
+Sources: CSDN AI味词库，Wikipedia AI生成文的特征，Humanizer-zh（WikiProject AI Cleanup），
+         53ai.com，Hello-SimpleAI，translate VM patterns，community observations.
 """
 from article_pipeline.config import load_config
 import json
@@ -46,9 +46,7 @@ from article_pipeline.review.style_compliance import (
     generate_compliance_report,
 )
 
-# ────────────────────────────────────────────────────────────────────
-# Existing checks (word count, format, facts, fabrication, semantic)
-# ────────────────────────────────────────────────────────────────────
+# Existing checks（word count，format，facts，fabrication，semantic）
 
 def check_word_count(text: str, tier: str = "A") -> dict:
     chars = len(re.sub(r"[\s\n\r\d\W]", "", text))
@@ -149,7 +147,7 @@ def check_fabrication(article: str, research_note: str) -> dict:
             "pass": len(flags) <= 2, "score": score}
 
 
-# ── Terminology violations ──
+# Terminology violations
 
 WP_TERM_VIOLATIONS = [
     # Only catch standalone "块编辑器/块主题" — not "区块编辑器/区块主题"
@@ -274,7 +272,7 @@ def check_terminology(article: str) -> dict:
 
 
 # Jargon and insider slang that alienates general readers.
-# These are tech-circle loanwords, management buzzwords, and domain shorthand
+# These are tech-circle loanwords，management buzzwords，and domain shorthand
 # that ordinary WordPress developers would find opaque.
 JARGON_BLACKLIST = [
     (r'银弹', '应为"万能方案"或直接描述具体方法'),
@@ -451,9 +449,7 @@ def check_semantic_facts(article: str, threshold: float = 0.9) -> dict:
             "total_claims": len(claims)}
 
 
-# ────────────────────────────────────────────────────────────────────
 # Scoring and suggestions
-# ────────────────────────────────────────────────────────────────────
 
 def compute_overall_score(results: dict) -> float:
     """Weighted overall quality score from review results."""
@@ -669,8 +665,8 @@ def compute_publish_gate(
 
     Args:
         value_density_result: assess_value_density() 返回的结果
-        has_differentiation: differentiation 是否非空且具体（>=20字）
-        has_unique_claims: unique_claims 是否非空（>=1条）
+        has_differentiation: differentiation 是否非空且具体（大于等于20字）
+        has_unique_claims: unique_claims 是否非空（大于等于1条）
 
     Returns:
         {
@@ -892,14 +888,12 @@ def run_self_review(article: str, tier: str = "A",
     return results
 
 
-# ────────────────────────────────────────────────────────────────────
-# Topic filtering — dbs-benchmark inspired 5-filter method
-# ────────────────────────────────────────────────────────────────────
+# Topic filtering，dbs-benchmark inspired 5-filter method
 
 def filter_topic_by_benchmark(keyword: str,
                                category: str = "",
                                search_results: list[dict] = None) -> BenchmarkFilterResult:
-    """选题五重过滤 - dbs-benchmark 启发
+    """选题五重过滤，dbs-benchmark 启发
 
     Args:
         keyword: 选题关键词
@@ -930,9 +924,7 @@ def generate_topic_filter_report(keyword: str,
     return bf.generate_report(keyword, category)
 
 
-# ────────────────────────────────────────────────────────────────────
-# Draft resonance check — dbs-resonate inspired 5-dimension diagnosis
-# ────────────────────────────────────────────────────────────────────
+# Draft resonance check，dbs-resonate inspired 5-dimension diagnosis
 
 def check_draft_resonance(draft: str, category: str = "") -> ResonanceReport:
     """文稿共鸣诊断
@@ -960,5 +952,4 @@ def generate_resonance_diagnosis_report(draft: str, category: str = "") -> str:
     return generate_resonance_report(draft, category)
 
 
-# ────────────────────────────────────────────────────────────────────
-# GEO (Generative Engine Optimization) checks — Frase 5-dimension model
+# GEO（Generative Engine Optimization）checks，Frase 5-dimension model

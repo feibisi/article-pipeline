@@ -7,7 +7,7 @@ from typing import Literal
 from article_pipeline.contracts import ProsodyOutput, StyleOutput
 from article_pipeline.style import get_preset
 
-# ── 范本类型定义 ──
+# 范本类型定义
 
 SampleType = Literal["short_push", "flowing", "staccato", "scaffold"]
 
@@ -35,7 +35,7 @@ _CATEGORY_DEFAULT_SAMPLE: dict[str, SampleType] = {
     "news": "short_push",
 }
 
-# ── 硬性禁止列表（品类无关，通用规则） ──
+# 硬性禁止列表，品类无关通用规则
 
 _COMMON_NEGATIVE_CONSTRAINTS = [
     "不使用「不得不说」「可以说」等无意义的填充词",
@@ -51,7 +51,7 @@ _COMMON_NEGATIVE_CONSTRAINTS = [
     "不使用「显而易见」——对作者显而易见不对读者显而易见",
 ]
 
-# ── 节奏提示模板 ──
+# 节奏提示模板
 
 _RHYTHM_HINTS: dict[SampleType, str] = {
     "short_push": "短句密集推进，判断句独立成段，关键数据单独一行",
@@ -61,7 +61,7 @@ _RHYTHM_HINTS: dict[SampleType, str] = {
 }
 
 
-# ── 路径工具 ──
+# 路径工具
 
 def _get_genre_base_path() -> Path:
     """获取 genres 目录路径."""
@@ -80,7 +80,7 @@ def _get_prosody_dir(genre: str) -> Path:
     return prosody_dir
 
 
-# ── 公共 API ──
+# 公共 API
 
 def load_prosody_samples(genre: str, sample_type: SampleType | None = None) -> list[str]:
     """加载指定品类的语感范本.
@@ -223,7 +223,7 @@ def run_prosody(style: StyleOutput, genre: str) -> ProsodyOutput:
     return build_prosody_output(style, genre)
 
 
-# ── 独立运行入口（用于测试） ──
+# 独立运行入口，用于测试
 
 if __name__ == "__main__":
     # 快速测试：加载 tutorial 品类的 Prosody

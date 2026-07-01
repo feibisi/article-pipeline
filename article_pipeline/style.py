@@ -1,9 +1,9 @@
-"""文风格调系统 — 五维坐标系 + 注入分层 + 中文审美概念映射."""
+"""文风格调系统，五维坐标系加注入分层加中文审美概念映射."""
 
 from __future__ import annotations
 from dataclasses import dataclass, field
 
-# ── Injection levels ──
+# Injection levels
 
 class Injection:
     NONE = "none"
@@ -11,7 +11,7 @@ class Injection:
     FULL = "full"
 
 
-# ── StyleVector ──
+# StyleVector
 
 @dataclass(frozen=True)
 class StyleVector:
@@ -30,7 +30,7 @@ class StyleVector:
                 raise ValueError(f"{name}={v} out of [-1, 1]")
 
 
-# ── Dimension → instruction mapping (5 dims × 4 intervals = 20 rules) ──
+# Dimension 与 instruction 映射（5 维乘 4 区间等于 20 条规则）
 
 _RANGES = (-1.0, -0.5, 0.0, 0.5, 1.0)
 
@@ -84,7 +84,7 @@ def _lookup(dim: str, value: float) -> str:
     return _DIM_RULES[dim][idx]
 
 
-# ── Category presets (21 categories) ──
+# Category presets（21 个品类）
 
 _PRESETS: dict[str, dict] = {
     "tutorial":            {"density":  0.3, "warmth":  0.6, "energy":  0.2, "register": -0.2, "edge":  0.2, "injection": Injection.FULL},
@@ -131,7 +131,7 @@ def get_preset_dict(category: str) -> dict:
     }
 
 
-# ── Instruction generation ──
+# Instruction generation
 
 def render_temperament(vector: StyleVector) -> list[str]:
     if not vector.active:
@@ -161,7 +161,7 @@ def render_injection(vector: StyleVector) -> str:
     )
 
 
-# ── Aesthetic concepts ──
+# Aesthetic concepts
 
 _AESTHETIC_CONCEPTS: list[dict[str, str]] = [
     {
@@ -228,7 +228,7 @@ def render_aesthetic_concepts(vector: StyleVector | None = None,
     return "\n".join(lines)
 
 
-# ── Full style block for writer prompt ──
+# Full style block for writer prompt
 
 def render_style_block(category: str, overrides: dict | None = None) -> str:
     preset = get_preset(category)
@@ -260,7 +260,7 @@ def render_style_block(category: str, overrides: dict | None = None) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
-# ── Humanizer dimension alignment (design doc: Phase 3) ──
+# Humanizer dimension alignment（design doc: Phase 3）
 
 STYLE_TO_HUMANIZER: dict[str, str] = {
     "density": "节奏",

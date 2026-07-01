@@ -1,4 +1,4 @@
-"""Article writing via DeepSeek API (Anthropic-compatible endpoint)."""
+"""Article writing via DeepSeek API（Anthropic-compatible endpoint）."""
 from article_pipeline.config import load_config
 from article_pipeline.style import render_style_block
 import os
@@ -11,8 +11,8 @@ import yaml
 
 
 # Content Trust Tiers
-# TIER_INTERNAL: Writer has domain knowledge; LLM can fill gaps and use hypothetical scenarios.
-# TIER_EXTERNAL: Facts come from external products/services; LLM must ONLY write from confirmed sources.
+# TIER_INTERNAL: Writer has domain knowledge，LLM can fill gaps and use hypothetical scenarios.
+# TIER_EXTERNAL: Facts come from external products/services，LLM must ONLY write from confirmed sources.
 TIER_INTERNAL_CATEGORIES = frozenset({
     "tutorial", "opinion", "comparison", "listicle", "guide",
     "troubleshooting", "beginner", "trend", "thought-leadership",
@@ -431,7 +431,7 @@ def _get_api_key() -> str | None:
 
 def _call_with_fallback(system_prompt: str, user_prompt: str,
                         max_tokens: int = 4096) -> dict:
-    """Try primary API, then fallback. Returns same dict shape as _call_messages_api."""
+    """Try primary API then fallback，returns same dict shape as _call_messages_api."""
     config = load_config()
     ds = config.get("deepseek", {})
     api_key = _get_api_key()
@@ -548,7 +548,7 @@ EDITOR_SYSTEM_PROMPT = f"""你是一位严苛的中文技术编辑。你的任�
 
 
 def polish_article(article: str, keyword: str = "") -> dict:
-    """Editorial polish pass — tighten language, strengthen conclusions."""
+    """Editorial polish pass，tighten language and strengthen conclusions."""
     polish_prompt = f"""请对下面这篇关于"{keyword}"的文章做编辑润色。
 
 ## 润色重点

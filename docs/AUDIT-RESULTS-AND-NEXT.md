@@ -12,14 +12,14 @@
 
 ### 1.1 SYSTEM-DEFINITION.md 整体过时
 
-**现状**: 描述旧的线性管线（Research→Outline→Write→Review→Publish），"三层正交"控制模型与级联编译矛盾。单 LLM 假设（GLM-5.1 + Ollama fallback）。
+**现状**: 描述旧的线性管线（Research→Outline→Write→Review→Publish），"三层正交"控制模型与级联编译矛盾。单 LLM 假设，GLM-5.1 + Ollama fallback。
 **修复**: 重写为级联编译架构版本。核心模块图改为 5 层 + 品类域 + 质量门控。三层正交改为"五层级联 + 双轨约束"。技术栈补充多 LLM。
 **工作量**: 约 60% 内容需重写，保留品类决策树和 Trust Tier 段落。
 **任务 ID**: FIX-01
 
 ### 1.2 STYLE-SYSTEM.md 过时
 
-**现状**: 仍是"单步注入 writer prompt"模型，无 prosody 层概念，无多 LLM 校准，无双轨约束。
+**现状**: 仍是"单步注入 writer prompt"模型，缺少 prosody 层概念、多 LLM 校准、双轨约束。
 **修复**: 新增"级联中的位置"节（L3 风格编译 + L4 语感注入），补充 model_calibration 段，明确 style = 工程层（硬约束编译），prosody = 创作层（软约束范本）。
 **工作量**: 新增 3 节，调整 2 节措辞。
 **任务 ID**: FIX-02
@@ -48,7 +48,7 @@
 
 ### 1.6 T-001/T-002 与 Phase 0 顺序
 
-**现状**: Phase 0 要求"迁移 _PRESETS 到 yaml 等价于硬编码"——如果 bug 未修就迁移，会锁定错误。
+**现状**: Phase 0 要求"迁移 _PRESETS 到 yaml 等价于硬编码"。如果 bug 未修就迁移，会锁定错误。
 **已修复**: T-001/T-002 已在代码中修复（writer.py + style.py）。只需在 OVERHAUL Phase 0 表格中标注"已完成"。
 **任务 ID**: FIX-06
 
@@ -87,8 +87,8 @@
 
 ### 2.5 模糊 LLM 评分作为硬门控
 
-**问题**: value_density 含"反直觉度"等需要 NLI/embedding 的子维度，不是纯规则可检查。
-**修复**: 在文档中明确标注"LLM 辅助硬门控"类别——区别于纯规则硬门控（句式禁令、字段非空）。承认这类门控有误判可能，需要 confidence 阈值。
+**问题**: value_density 含"反直觉度"等需要 NLI/embedding 的子维度，非纯规则可检查。
+**修复**: 在文档中明确标注"LLM 辅助硬门控"类别，区别于纯规则硬门控（句式禁令、字段非空）。需承认这类门控有误判可能，需要 confidence 阈值。
 **任务 ID**: FIX-12
 
 ### 2.6 xiaohei-scenes 重复描述

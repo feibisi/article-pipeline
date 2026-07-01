@@ -27,7 +27,7 @@
 
 ### 1. A/B 验证无法归因 ✅ 接受
 
-**问题**：改造前 vs 改造后对比无法归因到"级联"，可能是其他因素。
+**问题**：改造前 vs 改造后对比无法归因到"级联"，可能由其他因素导致。
 
 **方案**：Phase 4 验证改为可消融设计（每层可开关）：
 
@@ -81,7 +81,7 @@ class SynthesisOutput:
 
 ### 4. 闭环反馈信噪比 ✅ 接受
 
-**问题**：用自然流量（阅读量）反推 framework 好坏，信噪比极低。
+**问题**：用自然流量（阅读量）反推 framework 好坏，信噪比低。
 
 **方案**：闭环分两阶段
 - Phase 1：只做"发布数据看板"（观察，不调参）
@@ -95,7 +95,7 @@ class SynthesisOutput:
 
 **问题**：第二条管线如果被"为了触发解耦"推着上，又过度工程化。
 
-**方案**：保持当前克制——解耦是结果不是目标。
+**方案**：保持当前克制，解耦是结果不是目标。
 - EVOLUTION-PLAN screenplay/video-script 讨论降为"探索性"
 - 明确触发条件：第二条管线的**真实需求**存在（不是假设）
 
@@ -105,7 +105,7 @@ class SynthesisOutput:
 
 ### 6. Trust Tier / injection_level 标注无评审 ✅ 接受
 
-**问题**：21 品类标注错了代价大，但 validate_genres.py 只校验结构不校验语义。
+**问题**：21 品类标注错了代价大，但 validate_genres.py 只校验结构，不校验语义。
 
 **方案**：
 1. 标注需双人评审（elementary + 外部读者）
@@ -135,7 +135,7 @@ class SynthesisOutput:
 
 ### B. style_vector → mood 跨域映射 ✅ 接受
 
-**问题**：5 维坐标映射到视觉氛围无谱，需 Studio 建对照表。
+**问题**：5 维坐标映射到视觉氛围缺少依据，需 Studio 建对照表。
 
 **方案**：
 1. Studio 建"文字风格坐标 → 视觉 mood/光线/色调"对照表
@@ -165,7 +165,7 @@ class SynthesisOutput:
 
 1. **cocobook 动态提取 framework 质量"不稳定"** — subagent B 报告中提到，但 Studio 报告未展开。需要评估"不稳定"的具体表现和改进方案。
 2. **消融实验的对照组设计** — {0001, 0010, 0100, 1000, 1111} 是否足够？是否需要 {1100, 1010, 0110} 交互效应测试？
-3. **freeform_note 传递到最下游** —— COMPILE 层如何利用 freeform_note？是注入 prompt 还是元数据记录？
+3. **freeform_note 传递到最下游** — COMPILE 层如何利用 freeform_note？是注入 prompt 还是元数据记录？
 
 ---
 

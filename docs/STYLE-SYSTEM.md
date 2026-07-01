@@ -4,7 +4,7 @@
 
 ## 概述
 
-文风格调系统用五维连续坐标系替代离散的 if-else 体裁规则，为每篇文章生成可执行的风格指令注入到 LLM 写作 prompt 中。
+文风格调系统用五维连续坐标系替代离散的 if-else 体裁规则，为每篇文章生成可执行的风格指令并注入到 LLM 写作 prompt 中。
 
 核心组件：
 1. **StyleVector** — 五维坐标数据结构
@@ -107,9 +107,9 @@
 `render_style_block()` 的输出正在从散文指令升级为结构化约束：
 
 - **当前**：输出散文指令（"请写得更有温度"），塞进 writer prompt 由 LLM 自由解读，结果不可控。
-- **目标**：同时输出两样东西——`{purpose, require, allow, avoid}` 结构化约束（机器可检查）+ 渲染后的文本指令（给 LLM 参考，辅助手段）。
+- **目标**：同时输出两样东西，`{purpose, require, allow, avoid}` 结构化约束（机器可检查）加渲染后的文本指令（给 LLM 参考，作为辅助手段）。
 
-每个维度重新定义编译规则（例：`edge(+)` → require: 判断句前置；avoid: "各有优劣"类 hedge 结论；可量化检查：判断句位置 + 确定性词密度）。Review 从"事后打分"变为"检查产出是否满足 require 并避开了 avoid"。
+每个维度重新定义编译规则（例：`edge(+)` → require: 判断句前置；avoid: "各有优劣"类 hedge 结论；可量化检查：判断句位置 + 确定性词密度）。Review 从"事后打分"变为"检查产出是否满足 require 并避开 avoid"。
 
 > 状态：设计已定，实现待 Phase 1-2。结构化约束模板已在 `style_preset.yaml` 的 `constraints` 段定义。
 
@@ -125,7 +125,7 @@ model_calibration:
   claude: {warmth: -0.1, register: -0.1}
 ```
 
-> 状态：字段已预留，offset 值未实施。等 T-006 `check_style_compliance()` 上线后，用量化的风格遵循度数据测出各模型的实际偏差，再确定 offset 值，避免拍脑袋。
+> 状态：字段已预留，offset 值未实施。等 T-006 `check_style_compliance()` 上线后，用量化的风格遵循度数据测出各模型的实际偏差，再确定 offset 值。
 
 ## 与 Writer Prompt 的集成
 
