@@ -39,6 +39,12 @@ from article_pipeline.review.dbs_resonate import (
     check_resonance,
     generate_resonance_report,
 )
+from article_pipeline.review.style_compliance import (
+    StyleComplianceChecker,
+    ComplianceReport,
+    check_style_compliance,
+    generate_compliance_report,
+)
 
 # ────────────────────────────────────────────────────────────────────
 # Existing checks (word count, format, facts, fabrication, semantic)
@@ -453,7 +459,7 @@ def compute_overall_score(results: dict) -> float:
     """Weighted overall quality score from review results."""
     weights = {"ai_check": 0.10, "dbs_ai": 0.15, "format": 0.05, "fabrication": 0.15,
                "cross_reference": 0.10, "semantic_facts": 0.08,
-               "word_count": 0.05, "humanizer": 0.22, "jargon": 0.10}
+               "word_count": 0.05, "humanizer": 0.14, "jargon": 0.10, "style_compliance": 0.08}
     # GEO is advisory — not in weighted score
     cross_ref = results.get("cross_reference")
     scores = {
@@ -466,6 +472,7 @@ def compute_overall_score(results: dict) -> float:
         "word_count": 7.0 if results.get("word_count", {}).get("pass") else 3.0,
         "humanizer": (results.get("humanizer", {}).get("total", 25) / 50) * 10,
         "jargon": 10.0 if results.get("jargon", {}).get("pass") else 4.0,
+        "style_compliance": results.get("style_compliance", {}).get("overall_score", 5),
     }
     return round(sum(scores[k] * weights[k] for k in weights), 1)
 
@@ -769,6 +776,22 @@ def run_self_review(article: str, tier: str = "A",
     term_check = check_terminology(article)
     jargon_check = check_jargon(article)
     geo_check = check_geo(article, tier)
+    # Style compliance check (风格遵循度)
+    style_compliance_result = check_style_compliance(article)
+    style_compliance = {
+        "overall_score": style_compliance_result.overall_score,
+        "dimensions": [
+            {
+                "name": d.name,
+                "score": d.score,
+                "status": d.status,
+                "details": d.details,
+                "evidence": d.evidence,
+            }
+            for d in style_compliance_result.dimensions
+        ],
+        "suggestions": style_compliance_result.suggestions,
+    }
     # Value density check (slop detection)
     value_density = assess_value_density(article, research_output or {}, ddg_results or [])
     # Cross-reference fact check (TIER_EXTERNAL only)
@@ -810,6 +833,7 @@ def run_self_review(article: str, tier: str = "A",
         "terminology": term_check,
         "jargon": jargon_check,
         "geo": geo_check,
+        "style_compliance": style_compliance,
         "value_density": value_density,
         "cross_reference": cross_ref,
         "overall_pass": all_pass and not dbs_ai_low,  # dbs_ai_low 时需要人工审查

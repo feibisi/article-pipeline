@@ -24,7 +24,7 @@ def test_pipeline_process_research(pipeline):
     assert result is not None
     task = pipeline.db.get_task(tid)
     assert task["research_note"] is not None
-    assert task["status"] == "outlining"
+    assert task["status"] == "synthesizing"
 
 
 def test_pipeline_run_processes_batch(pipeline):
