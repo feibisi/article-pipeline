@@ -101,6 +101,29 @@ WRITER_SYSTEM_PROMPT = f"""你是面向中文 WordPress 开发者的技术编辑
 - 全文不超过3个破折号（——）。正常中文写作不会用超过两次破折号"""
 
 
+_NEGATIVE_CONSTRAINTS = """## 硬性禁止（违反即废稿）
+
+绝对禁止以下句式（出现即废稿，用直接陈述替代）：
+- "不是 X，而是 Y" / "X 不是 A，是 B" → 直接说结论
+- "与其说...不如说..."
+- "本质上是..." / "归根结底是..."
+- "说白了就是..." / "换句话说..."（第一句没说清就重写第一句）
+- "值得注意的是..." / "需要强调的是..." / "重要的是..."
+- "让我们来看看..." / "接下来我们..."
+- "在...的背景/趋势/浪潮下"开头的段落
+- "首先...其次...最后..." 三段论排比
+- 连续 3 个以上结构相同的排比句
+- "随着...的发展/普及/深入"
+- 破折号（——）作为解释补充（用括号或另起一句替代）
+- 连续使用 3 个以上逗号的长句（拆成短句）
+
+禁止以下标点习惯：
+- 破折号（——）用于插入解释（改用括号或分句）
+- 省略号（……）用于制造"深意"
+- 感叹号连用
+"""
+
+
 def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
     """Return genre-specific hard writing rules derived from Chinese prose principles."""
     if tier == "TIER_EXTERNAL":
@@ -369,6 +392,7 @@ def _build_writer_prompt(keyword: str, category: str, outline: dict,
     style_block = render_style_block(category, style_overrides)
     style_prefix = f"\n{style_block}\n" if style_block else "\n"
     return f"""{_genre_rules(category, tier)}{style_prefix}
+{_NEGATIVE_CONSTRAINTS}
 {samples_block}{anchor_block}## 文章信息
 - 标题: {title}
 - 关键词: {keyword}
