@@ -3,7 +3,7 @@ vector:
   warmth: 0.5
   energy: 0.5
   register: 0.0
-  edge: 0.6
+  edge: 0.3
 constraints:
   purpose: 为文章定义风格约束
   require:

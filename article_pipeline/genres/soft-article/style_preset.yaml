@@ -1,6 +1,6 @@
 vector:
-  density: 0.0
-  warmth: 0.5
+  density: 0.3
+  warmth: 0.2
   energy: 0.2
   register: -0.1
   edge: 0.3
