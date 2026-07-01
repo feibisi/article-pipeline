@@ -795,6 +795,290 @@ Studio 的 concept-density 模块：当检测到概念密度低于阈值时，�
 
 ---
 
+## 工程与创作的张力（Engineering vs Creation）
+
+### 问题本质
+
+文章管线是工程系统还是创作工具？两者的控制逻辑相反：
+
+| | 工程思维 | 创作思维 |
+|---|---|---|
+| 目标 | 可预测、可复现 | 意外之喜、不可复现 |
+| 约束 | 越硬越好（规则明确） | 越软越好（允许偏离） |
+| 质量 | 底线达标 = 合格 | 底线之上还有天花板 |
+| 错误 | 必须消除 | 某些"错误"反而有趣 |
+| 优化 | 减少方差 | 保留方差中的好部分 |
+
+管线不能只选一边。纯工程 = 高级模板机（3→7 容易，7→9 不可能）。纯创作 = 不可控（有时 9 分有时 3 分）。
+
+### 解法：双轨约束模型
+
+```
+硬约束（工程层）— 保底线，不可违反
+  │
+  │  效果：把 3 分拉到 7 分
+  │  机制：规则检查 + 自动拦截
+  │  举例：
+  │    - 禁止特定 AI 句式（_NEGATIVE_CONSTRAINTS）
+  │    - 素材密度不足不进入写作（synthesis 门控）
+  │    - value_density < 4.0 不发布
+  │    - differentiation 字段不能为空
+  │    - 每段必须有信息增量（不能空转）
+  │
+  ▼
+软约束（创作层）— 提上限，允许有理由地偏离
+    效果：从 7 分到 9 分的可能性
+    机制：advisory 评分 + 人工复核
+    举例：
+      - 语感范本（prosody samples）— 提供方向不强制
+      - 审美概念（"意在言外"）— 激活而非命令
+      - framework 建议的段落结构 — 可打破但需要理由
+      - 风格坐标的微调 — ±0.2 以内的偏离不扣分
+```
+
+### 工程层设计原则
+
+1. **可验证性**：每条硬约束必须有自动化检测方法（不能靠人读才能判断）
+2. **最小化**：硬约束越少越好，只管"绝对不能犯的错"
+3. **负面定义**：说"不能做什么"比"必须做什么"更适合工程层（创作有无限种正确方式，但错误模式有限）
+4. **分层拦截**：越早拦截越便宜（synthesis 层拦截 > outline 层拦截 > write 后打回）
+
+### 创作层设计原则
+
+1. **非强制性**：软约束是"参考方向"不是"必须遵守"
+2. **范本驱动**：好的范本比好的规则更能引导创作（few-shot > instruction）
+3. **允许意外**：审美概念激活 LLM 的联想空间，结果不完全可预测——这是特性不是 bug
+4. **人工最终判断**：7→9 的差距只有人能判断，系统只负责创造条件
+
+### 在级联编译中的体现
+
+```
+Layer 1 SYNTHESIS:  纯工程层（结构化输出，门控拦截）
+Layer 2 FRAMEWORK:  工程为主 + 轻创作（方法论是工程，段落分配允许偏离）
+Layer 3 STYLE:      工程层（结构化约束编译，纯配置）
+Layer 4 PROSODY:    纯创作层（范本引导，允许偏离，不做强制检查）
+Layer 5 COMPILE:    工程层（组装，token 控制）+ 创作自由度在 writer prompt 内部
+```
+
+核心洞察：前 3 层是工程（确定性、可回滚、可检查），第 4 层是创作（范本引导、允许意外），第 5 层是混合（工程的组装 + 创作的生成）。
+
+### 实际影响
+
+这个模型决定了哪些环节投入自动化、哪些环节保留人工：
+
+| 环节 | 性质 | 自动化程度 |
+|------|------|-----------|
+| 选题评估 | 工程 | 全自动（密度/饱和度/差异化三指标） |
+| synthesis 生成 | 工程 | 全自动 + confidence 门控 |
+| framework 选择 | 工程 | 全自动（品类 manifest 映射） |
+| 段落结构 | 工程为主 | 自动生成，允许人工调整 |
+| 风格编译 | 工程 | 全自动（坐标→约束的确定性映射） |
+| 语感注入 | 创作 | 范本推荐自动，效果判断人工 |
+| 写作生成 | 混合 | 自动生成，质量判断双轨 |
+| 质量检查 | 工程部分全自动 | 硬约束自动拦截；软约束 advisory 展示 |
+| 发布决策 | 创作 | 系统建议，人工最终决定 |
+
+### 与成本的关系
+
+用户明确：多 LLM 供应商可选（DeepSeek 等），成本不是约束。这意味着：
+
+- synthesis 层可以用便宜模型（GLM/DeepSeek）跑多次取最佳
+- 不需要因为成本牺牲任何质量层的调用
+- 可以做"写 3 篇选最好的 1 篇"策略（创作层的方差利用）
+- framework 和 prosody 的 LLM 辅助选择不需要吝啬 token
+
+这解放了架构：不需要把所有逻辑塞进一次 LLM 调用里"省钱"，可以按级联模型老老实实走 5 层。
+
+---
+
+## 素材策略：从文字到视觉的编译延伸
+
+### 背景
+
+文章不只是文字。配图质量直接影响传播力和阅读完成率。当前管线只产出文本，视觉素材完全依赖人工。
+
+两个参考项目揭示了 AI 素材生成的两种范式：
+
+### 参考项目分析
+
+#### archify（架构图 Skill）
+
+| 维度 | 分析 |
+|------|------|
+| 定位 | 纯工程产物——系统架构/流程/序列/数据流/生命周期图 |
+| 输入 | 自然语言描述或 Mermaid 代码 |
+| 输出 | 自包含 HTML（SVG + 主题切换 + 导出菜单） |
+| 核心模式 | 5 种图类型 × 结构化 JSON schema × 渲染器验证 |
+| prompt 工程 | 不做自由生成，强制结构化中间产物（JSON）→ 确定性渲染 |
+| 质量保证 | schema 验证 + 布局碰撞检测 + CJK 文本宽度感知 |
+| 适用场景 | 技术文章的架构说明图、流程解释图 |
+
+关键借鉴：**结构化中间产物 + 确定性渲染** = 可控的视觉输出。不让 LLM 直接画图，而是让它描述图的结构，再用渲染器保证视觉质量。
+
+#### ian-xiaohei-scenes（小黑实物场景图 Skill）
+
+| 维度 | 分析 |
+|------|------|
+| 定位 | 创作产物——文章正文配图的视觉语言系统 |
+| 输入 | 中文文章内容 + 用户处境分析 |
+| 输出 | 16:9 正文配图 或 超横版长卷故事图 |
+| 核心模式 | 母版锚定 + 变异规则 + 物件隐喻映射 |
+| prompt 工程 | 先"消化内容提炼处境"→ shot list → 母版锁定 → 逐张生成 |
+| 质量保证 | 母版作为质量标尺 + 硬性预算（1个动作/1个主物件/最多4标签）+ QA checklist |
+| 适用场景 | 打工人共鸣图、项目复盘、AI 时代处境、观点隐喻 |
+
+关键借鉴：
+
+1. **先理解再出图**（消化内容 → 提炼处境 → 物件隐喻映射）——和我们 synthesis 层的思路一致
+2. **母版锚定 + 强制变异**——不自由发挥，有质量标尺，但必须偏离防止雷同
+3. **硬性预算**——创作层也需要工程约束（和双轨模型一致）
+4. **事实锚定**——只使用用户提供的事实，不编造（和我们 trust tier 思路一致）
+5. **标准模式 vs 彩蛋模式**——同一套视觉语言支持日常和特殊场景
+
+### 素材在管线中的位置
+
+```
+Level 1: 文字编译（当前管线，独立完整）
+  keyword → synthesis → framework → style → prosody → compile → article
+
+Level 2: 视觉编译（与 Studio 协作）
+  article.visual_brief → Studio pipeline → 配图资产 → 组装发布
+
+Level 3: 素材自给（本地能力，不依赖 Studio）
+  article.key_concepts → archify（技术图）→ inline figures
+  article.narrative_points → xiaohei-scenes（共鸣图）→ hero/inline images
+```
+
+三个 Level 不互斥：
+- Level 1 是基础，任何时候都能独立产出纯文本文章
+- Level 2 是高配，品牌内容套件走 Studio 协作
+- Level 3 是中配，日常文章用本地 Skill 快速出图
+
+### 素材类型与工具映射
+
+| 文章类型 | 需要的配图 | 工具 | 触发条件 |
+|---------|-----------|------|---------|
+| 技术教程 | 架构图、流程图、数据流图 | archify | framework 含多组件交互 |
+| 观点文 | 观点隐喻图、处境共鸣图 | xiaohei-scenes | 有明确立场/处境描述 |
+| 对比评测 | 对比表格图、性能曲线 | archify(dataflow) | 多维度对比数据 |
+| 项目复盘 | 长卷故事图、时间线 | xiaohei-scenes(彩蛋) | 有时间跨度的叙事 |
+| 故障排查 | 序列图、调用链 | archify(sequence) | 多步排查过程 |
+| 品牌营销 | 定制品牌配图 | Studio 协作 | brand trust_tier |
+
+### 集成方案（Phase 5 预留）
+
+不在当前改造范围内做，但架构设计上预留接口：
+
+```python
+@dataclass
+class VisualBrief:
+    """Level 2/3 视觉编译的输入契约"""
+    article_id: str
+    title: str
+    key_concepts: list[str]       # 核心概念（archify 输入）
+    narrative_points: list[str]   # 叙事节点（xiaohei-scenes 输入）
+    mood: str                     # 从 style 坐标推导
+    genre: str                    # 决定默认配图类型
+    figures_needed: list[dict]    # [{position: "hero"|"inline", type: "diagram"|"scene"}]
+```
+
+FrameworkOutput 新增可选字段（Phase 5 时激活）：
+
+```python
+@dataclass
+class FrameworkOutput:
+    # ... 现有字段 ...
+    visual_anchors: list[dict] | None = None  # [{section_role, concept, suggested_visual_type}]
+```
+
+### 与 Studio 的分工
+
+| | elementary 本地 | Studio 协作 |
+|---|---|---|
+| 触发 | 自动（genre 匹配） | NATS 请求 |
+| 速度 | 即时（Skill 调用） | 异步（分钟级） |
+| 质量 | 中等（Skill 标准） | 高（品牌定制） |
+| 适用 | 日常文章、技术教程 | 品牌内容、重点推广 |
+| 成本 | LLM 调用费 | LLM + Studio 工作量 |
+
+日常文章默认走 Level 3（本地 Skill），重要内容升级到 Level 2（Studio）。决策标准：trust_tier = EXTERNAL 或 priority >= 2 → Studio；否则本地。
+
+### 已确认的基础设施
+
+| 能力 | 状态 | 位置 |
+|------|------|------|
+| archify Node.js 渲染器 | 可直接部署 | elementary (Node v22.23.0) |
+| 图像生成后端 | 3 后端就绪 | Studio: Lovart SDK(56模型) + OpenAI(gpt-image-2) + Gemini |
+| prompt 编译系统 | 成熟 | Studio prompts workspace（59域/15K术语/意图→英文prompt） |
+| 截图服务 | 就绪 | elementary Pinchtab (headless Chrome, port 9867) |
+| 图片优化链 | 就绪 | elementary (pngquant/oxipng/jpegoptim/cwebp/svgo) |
+| 品牌配图 | 可用 | Studio image-gen workspace → NATS 交付 |
+
+### 四类素材的生产路径
+
+```
+1. 架构/流程/技术图（确定性产物）
+   article → VisualBrief.key_concepts → archify JSON → render-*.mjs → HTML/SVG/PNG
+   执行者: elementary 本地（Node.js 直跑）
+   质量: schema 验证 + 布局碰撞检测（工程层，确定性高）
+
+2. 内容配图/共鸣图（创作性产物）
+   article → VisualBrief.narrative_points → Studio prompts compose → image-gen → PNG
+   执行者: Studio（elementary NATS 发 visual_brief → Studio 出图 → 回传资产路径）
+   质量: Studio quality_gate (score >= 0.6) + 人工验收
+   参考: xiaohei-scenes 的"先理解处境再出图"模式可集成到 prompts compose 流程
+
+3. 产品截图（实测证据）
+   article.verifiable_operations → Pinchtab 截图 → img-process 优化 → inline figure
+   执行者: elementary 本地（Pinchtab headless Chrome）
+   质量: 自动裁切 + 优化压缩，无需 AI
+   场景: 教程步骤验证、对比评测实测、故障排查实际报错
+
+4. 数据可视化（统计图表）
+   article.data_points → gnuplot/matplotlib → SVG/PNG
+   执行者: elementary 本地
+   质量: 数据准确性（硬约束）
+   场景: 性能对比、趋势分析、基准测试结果
+```
+
+### 截图在管线中的特殊地位
+
+截图不是"配图"而是**证据**。在我们的反 slop 策略中：
+
+- "可验证操作"是 value_density 的核心维度（>30% 段落需含具体操作）
+- 截图是操作可验证性的最高级证明——比代码块更直观
+- 教程类文章的截图不可省略：读者需要看到"做对了长这样"
+
+截图策略：
+
+| 时机 | 截图类型 | 触发 |
+|------|---------|------|
+| 步骤验证 | 操作结果截图 | framework.structure 中 role=steps 的段落 |
+| 终态展示 | 完成后效果截图 | framework.structure 中 role=opening 的"展示终态" |
+| 错误示例 | 错误信息截图 | framework.structure 中 role=detours |
+| 对比展示 | 前后对比截图 | genre=comparison 的维度对比段落 |
+
+在 FrameworkOutput 中，visual_anchors 应区分"需要截图"和"需要生成图"：
+
+```python
+visual_anchors: list[dict] | None = None
+# [{
+#   section_role: str,
+#   concept: str,
+#   visual_type: "screenshot" | "diagram" | "scene" | "chart",
+#   screenshot_target: str | None,  # Pinchtab URL（visual_type=screenshot 时）
+#   diagram_spec: str | None,       # archify 自然语言描述（visual_type=diagram 时）
+# }]
+```
+
+### 待决策
+
+1. xiaohei-scenes 风格是否纳入 Studio prompts 系统作为一个 domain（推荐，复用已有编译能力）
+2. 截图自动化程度——是否在 pipeline run 时自动调 Pinchtab，还是标记位置后人工补充
+3. 配图位置是在 outline 阶段确定还是 compile 阶段确定（推荐 outline，和 framework 绑定）
+
+---
+
 ## 总结：系统需要什么
 
 ```
