@@ -1071,11 +1071,11 @@ visual_anchors: list[dict] | None = None
 # }]
 ```
 
-### 待决策
+### 已决策
 
-1. xiaohei-scenes 风格是否纳入 Studio prompts 系统作为一个 domain（推荐，复用已有编译能力）
-2. 截图自动化程度——是否在 pipeline run 时自动调 Pinchtab，还是标记位置后人工补充
-3. 配图位置是在 outline 阶段确定还是 compile 阶段确定（推荐 outline，和 framework 绑定）
+1. **xiaohei-scenes 风格 → Studio prompts 新 domain**。复用 Studio 已有的意图编译+术语注入+质量门禁能力，不在 elementary 本地重建图像生成链路。elementary 只负责发 visual_brief，Studio 负责从意图到出图的全流程。
+2. **截图先标记位置，后续自动化**。当前 FrameworkOutput.visual_anchors 标记"这里需要截图"即可，人工用 Pinchtab 补充。后续可能接入质检管线（play-smoke/Playwright）实现自动截取，到时评估是新建截图管线还是复用现有 QA 工具链。
+3. **配图位置在 outline 阶段确定**。与 framework 绑定：framework.structure 中每个段落 role 可声明 visual_type 需求，outline 生成时同步输出 visual_anchors。不在 compile 阶段临时决定。
 
 ---
 
