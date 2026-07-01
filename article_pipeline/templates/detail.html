@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% block title %}{{ task.keyword }}{% endblock %}
+
+{% block content %}
+<!-- A. Sticky action bar -->
+<div class="action-bar">
+  <div style="flex:1">
+    <strong>{{ task.keyword }}</strong>
+    <span class="badge badge-neutral">{{ task.category }}</span>
+    {% if review and review.overall_pass %}
+    <span class="badge badge-pass">通过</span>
+    {% else %}
+    <span class="badge badge-fail">未通过</span>
+    {% endif %}
+    {% if revision_count %}<span class="badge badge-rev">R{{ revision_count }}</span>{% endif %}
+  </div>
+  <form method="POST" action="/approve?id={{ task.id }}" style="display:inline">
+    <button type="submit" class="btn btn-primary" onclick="return confirm('确认发布？')">批准发布</button>
+  </form>
+  <a href="/revision?id={{ task.id }}" class="btn btn-warning">修订</a>
+  <form method="POST" action="/reject?id={{ task.id }}" style="display:inline">
+    <button type="submit" class="btn btn-danger" onclick="return confirm('拒绝 this article?')">拒绝</button>
+  </form>
+  {% if review and review.suggestions %}
+  <form method="POST" action="/auto-revise?id={{ task.id }}" style="display:inline">
+    <button type="submit" class="btn btn-secondary" onclick="return confirm('Auto-revise with suggestions?')">自动修订</button>
+  </form>
+  {% endif %}
+  <a href="/" class="btn btn-secondary">返回</a>
+</div>
+
+{% if review %}
+{% set hz = review.get("humanizer", {}) %}
+{% set sem = review.get("semantic_facts", {}) %}
+{% set ai = review.get("ai_check", {}) %}
+{% set fab = review.get("fabrication", {}) %}
+{% set fmt = review.get("format", {}) %}
+{% set wc = review.get("word_count", {}) %}
+<!-- B. Score overview grid -->
+<div class="score-grid">
+  <div class="score-card">
+    <div class="score-ring" style="background:conic-gradient(var({% if review.overall_score >= 6 %}--success{% elif review.overall_score >= 4 %}--warning{% else %}--danger{% endif %}) {{ (review.overall_score / 10 * 360)|round }}deg, #e8e4e0 0deg)">
+      <span class="value">{{ review.overall_score }}</span>
+    </div>
+    <div class="label" style="margin-top:8px">总分</div>
+  </div>
+  <div class="score-card">
+    <div class="score-ring" style="background:conic-gradient(var({% if ai.score >= 7 %}--success{% elif ai.score >= 5 %}--warning{% else %}--danger{% endif %}) {{ (ai.score / 10 * 360)|round }}deg, #e8e4e0 0deg)">
+      <span class="value">{{ ai.score }}</span>
+    </div>
+    <div class="label" style="margin-top:8px">AI 检测</div>
+  </div>
+  <div class="score-card">
+    <div class="score-ring" style="background:conic-gradient(var({% if fab.score >= 8 %}--success{% elif fab.score >= 5 %}--warning{% else %}--danger{% endif %}) {{ (fab.score / 10 * 360)|round }}deg, #e8e4e0 0deg)">
+      <span class="value">{{ fab.score }}</span>
+    </div>
+    <div class="label" style="margin-top:8px">编造检测</div>
+  </div>
+  <div class="score-card">
+    <div class="score-ring" style="background:conic-gradient(var({% if sem.pass %}--success{% else %}--danger{% endif %}) {{ (sem.verified / sem.total_claims * 360)|round if sem.total_claims else 0 }}deg, #e8e4e0 0deg)">
+      <span class="value">{{ sem.verified }}/{{ sem.total_claims }}</span>
+    </div>
+    <div class="label" style="margin-top:8px">事实核实</div>
+  </div>
+  <div class="score-card">
+    <div class="score-ring" style="background:conic-gradient(var({% if hz.total >= 40 %}--success{% elif hz.total >= 30 %}--warning{% else %}--danger{% endif %}) {{ (hz.total / 50 * 360)|round }}deg, #e8e4e0 0deg)">
+      <span class="value">{{ hz.total }}</span>
+    </div>
+    <div class="label" style="margin-top:8px">Humanizer {{ hz.grade }}</div>
+  </div>
+  {% set geo = review.get("geo", {}) %}
+  <div class="score-card">
+    <div class="score-ring" style="background:conic-gradient(var({% if geo.total >= 75 %}--success{% elif geo.total >= 50 %}--warning{% else %}--danger{% endif %}) {{ (geo.total / 100 * 360)|round }}deg, #e8e4e0 0deg)">
+      <span class="value">{{ geo.total|default(0) }}</span>
+    </div>
+    <div class="label" style="margin-top:8px">GEO</div>
+  </div>
+</div>
+
+<!-- C. Detail sections (accordion) -->
+<!-- 1. AI 检测 -->
+<details class="section" open>
+  <summary>AI Pattern Detection <span class="badge {{ 'badge-pass' if ai.pass else 'badge-fail' }}">{{ ai.score }}/10</span></summary>
+  <div class="section-body">
+    {% if ai.flags %}
+    <table class="flags-table">
+      <thead><tr><th>Pattern</th><th>Count</th><th>Match</th><th>Weight</th></tr></thead>
+      <tbody>
+        {% for f in ai.flags %}
+        <tr>
+          <td><code>{{ f.pattern }}</code></td>
+          <td>{{ f.count }}</td>
+          <td>{{ f.match|default('') }}{{ f.type|default('') }}</td>
+          <td>{{ 'heavy' if f.pattern in heavy_tags else 'filler' if f.pattern in filler_tags else 'light' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--success)">No AI patterns detected.</p>
+    {% endif %}
+  </div>
+</details>
+
+<!-- 2. Humanizer 5-dimension -->
+<details class="section">
+  <summary>Humanizer Quality <span class="badge {{ 'badge-pass' if hz.total >= 40 else 'badge-warn' }}">{{ hz.total }}/50</span></summary>
+  <div class="section-body">
+    <div class="dim-grid">
+      {% for dname, dinfo in hz.dimensions.items() %}
+      <div class="dim-card">
+        <div class="dim-name">{{ dname }}</div>
+        <div class="dim-bar"><div class="dim-fill" style="width:{{ dinfo.score * 10 }}%;background:{% if dinfo.score >= 8 %}var(--success){% elif dinfo.score >= 6 %}var(--warning){% else %}var(--danger){% endif %}"></div></div>
+        <div class="dim-score">{{ dinfo.score }}/10</div>
+        {% if dinfo.flags %}<div class="dim-flags">{{ dinfo.flags|join('; ') }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</details>
+
+<!-- 3. 编造检测 -->
+<details class="section">
+  <summary>编造检测 Check <span class="badge {{ 'badge-pass' if fab.pass else 'badge-fail' }}">{{ fab.fabrication_flags }} flags</span></summary>
+  <div class="section-body">
+    {% if fab.details %}
+    {% for d in fab.details %}
+    <div class="suggestion low">
+      <span class="sug-cat">{{ d.type }}</span>
+      <div class="sug-issue">
+        {% if d.examples %}{{ d.examples|join(', ') }}{% elif d.domain %}{{ d.domain }}{% elif d.stat %}{{ d.stat }}{% elif d.source %}{{ d.source }}{% elif d.name %}{{ d.name }}{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--success)">No fabrication issues detected.</p>
+    {% endif %}
+  </div>
+</details>
+
+{% set xref = review.get("cross_reference") %}
+{% if xref %}
+<!-- 4. 事实溯源检查 -->
+<details class="section" {{ 'open' if not xref.pass }}>
+  <summary>事实溯源检查 <span class="badge {{ 'badge-pass' if xref.pass else 'badge-fail' }}">{{ xref.flags }} unmatched</span></summary>
+  <div class="section-body">
+    {% if xref.details %}
+    {% for d in xref.details %}
+    <div class="suggestion high">
+      <span class="sug-cat">{{ d.type }}</span>
+      <div class="sug-issue">{{ d.value }}</div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--success)">All facts traceable to research note.</p>
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
+<!-- 5. Semantic Facts -->
+<details class="section">
+  <summary>Semantic Fact Verification <span class="badge {{ 'badge-pass' if sem.pass else 'badge-fail' }}">{{ sem.verified }}/{{ sem.total_claims }}</span></summary>
+  <div class="section-body">
+    {% if sem.verified_details %}
+    <h4 style="color:var(--success)">Verified</h4>
+    {% for v in sem.verified_details %}
+    <div class="suggestion low" style="border-color:var(--success)">
+      <div class="sug-issue">{{ v.claim }}</div>
+      <div class="sug-fix">Evidence: {{ v.evidence }} (score: {{ v.score }})</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if sem.details %}
+    <h4 style="color:var(--danger);margin-top:16px">Unverified</h4>
+    {% for u in sem.details %}
+    <div class="suggestion high">
+      <div class="sug-issue">{{ u.claim }}</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+</details>
+
+<!-- 5. Format & Word Count -->
+<details class="section">
+  <summary>Format & Word Count <span class="badge {{ 'badge-pass' if fmt.pass and wc.pass else 'badge-fail' }}">Structure</span></summary>
+  <div class="section-body">
+    <table class="flags-table">
+      <tr><th>Metric</th><th>Value</th><th>Status</th></tr>
+      <tr><td>H2 headers</td><td>{{ 'Yes' if fmt.has_h2 else 'No' }}</td><td>{{ '<span class="badge badge-pass">OK</span>' if fmt.has_h2 else '<span class="badge badge-fail">Missing</span>' }}</td></tr>
+      <tr><td>Intro paragraph</td><td>{{ 'Yes' if fmt.has_intro else 'No' }}</td><td>{{ '<span class="badge badge-pass">OK</span>' if fmt.has_intro else '<span class="badge badge-fail">Missing</span>' }}</td></tr>
+      <tr><td>Paragraphs</td><td>{{ fmt.para_count }}</td><td>{{ '<span class="badge badge-pass">OK</span>' if fmt.para_count >= 4 else '<span class="badge badge-fail">Need &ge;4</span>' }}</td></tr>
+      <tr><td>Characters</td><td>{{ wc.chars }}</td><td>{{ '<span class="badge badge-pass">OK</span>' if wc.pass else '<span class="badge badge-fail">' ~ (wc.reason|default('')) ~ '</span>' }}</td></tr>
+    </table>
+  </div>
+</details>
+
+<!-- 6. GEO Optimization -->
+{% set geo = review.get("geo", {}) %}
+{% if geo and geo.get("dimensions") %}
+<details class="section">
+  <summary>GEO Optimization <span class="badge {{ 'badge-pass' if geo.pass else 'badge-fail' }}">{{ geo.total|default(0) }}/100</span></summary>
+  <div class="section-body">
+    <div class="dim-grid" style="grid-template-columns:repeat(5,1fr)">
+      {% set geo_dim_names = {"extractability": "可提取性", "fact_density": "数据密度", "authority_signal": "权威信号", "freshness": "时效性", "structural_metadata": "结构化"} %}
+      {% for dim_key, dim_data in geo.dimensions.items() %}
+      <div class="dim-card">
+        <div class="dim-name">{{ geo_dim_names.get(dim_key, dim_key) }}</div>
+        <div class="dim-bar"><div class="dim-fill" style="width:{{ (dim_data.score / 20 * 100)|round }}%;background:{% if dim_data.score >= 15 %}var(--success){% elif dim_data.score >= 10 %}var(--warning){% else %}var(--danger){% endif %}"></div></div>
+        <div class="dim-score">{{ dim_data.score }}/20</div>
+        {% if dim_data.get("flags") %}<div class="dim-flags">{{ dim_data.flags|join('; ') }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if geo.get("suggestions") %}
+    <div style="margin-top:12px">
+      {% for s in geo.suggestions %}
+      <div class="suggestion {{ s.priority }}">
+        <div class="sug-cat">{{ s.category }} [{{ s.priority }}]</div>
+        <div class="sug-issue">{{ s.issue }}</div>
+        <div class="sug-fix">{{ s.fix }}</div>
+        <div style="font-size:12px;color:var(--muted)">{{ s.detail|default('') }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
+<!-- 7. Revision Suggestions -->
+{% if review.suggestions %}
+<details class="section" open>
+  <summary>Revision Suggestions <span class="badge badge-warn">{{ review.suggestions|length }}</span></summary>
+  <div class="section-body">
+    {% for s in review.suggestions %}
+    <div class="suggestion {{ s.priority }}">
+      <div class="sug-cat">{{ s.category }} [{{ s.priority }}]</div>
+      <div class="sug-issue">{{ s.issue }}</div>
+      <div class="sug-fix">{{ s.fix }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+
+{% endif %}
+
+<!-- D. Version history with score trends -->
+{% if version_scores and version_scores|length > 0 %}
+<details class="section" open>
+  <summary>版本历史 <span class="badge badge-neutral">v{{ version_scores|length }}</span></summary>
+  <div class="section-body">
+    <div style="display:flex;gap:8px;align-items:center;padding:8px 0">
+    {% for vs in version_scores %}
+      <div style="flex:1;text-align:center;padding:8px;border-radius:6px;background:var({% if vs.passed %}--success-bg{% else %}--danger-bg{% endif %});font-size:13px">
+        <div style="font-weight:700;font-size:18px">v{{ vs.version }}</div>
+        <div style="color:var({% if vs.score >= 6 %}--success{% elif vs.score >= 4 %}--warning{% else %}--danger{% endif %})"><strong>{{ vs.score }}</strong>/10</div>
+        <div style="font-size:11px;color:var(--muted)">AI:{{ vs.ai_score }} Fab:{{ vs.fab_score }}</div>
+        <div style="font-size:11px;color:var(--muted)">{{ vs.chars }}c</div>
+        {% if not loop.last %}
+        <div style="text-align:center;font-size:12px;margin-top:4px">
+          {% set delta = vs.score - version_scores[loop.index0 + 1].score if loop.index0 + 1 < version_scores|length else 0 %}
+          {% if version_scores|length > 1 and loop.index0 + 1 < version_scores|length %}
+            {% set next = version_scores[loop.index0 + 1] %}
+            {% set d = next.score - vs.score %}
+            <span style="color:var({{ '--success' if d > 0 else '--danger' if d < 0 else '--muted' }})">{{ '+' if d > 0 else '' }}{{ d|round(1) }}</span>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+      {% if not loop.last %}<span style="color:var(--muted)">→</span>{% endif %}
+    {% endfor %}
+    </div>
+  </div>
+</details>
+{% endif %}
+
+<!-- E. Review history -->
+{% if feedback_history %}
+<details class="section">
+  <summary>审阅历史 <span class="badge badge-neutral">{{ feedback_history|length }}</span></summary>
+  <div class="section-body">
+    <ul class="timeline">
+      {% for h in feedback_history %}
+      <li>
+        <div class="time">{{ h.created_at[:16] if h.created_at else '?' }}</div>
+        <div class="content">
+          {{ h.reviewer }}
+          <span class="badge {{ 'badge-pass' if h.verdict == 'approve' else 'badge-fail' if h.verdict == 'reject' else 'badge-warn' }}">{{ h.verdict }}</span>
+          {% if h.score %}<span class="badge badge-neutral">{{ h.score }}</span>{% endif %}
+          {% set fb = h.feedback if h.feedback is mapping else {} %}
+          {% if fb.notes %}<br><span style="color:var(--muted)">{{ fb.notes[:200] }}</span>{% endif %}
+          {% if fb.issues %}<br><span style="font-size:12px">Issues: {{ fb.issues|join(', ') }}</span>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</details>
+{% endif %}
+
+<!-- E. 提纲 & 研究笔记 -->
+{% if task.outline %}
+<details class="section">
+  <summary>提纲</summary>
+  <div class="section-body">
+    {% set outline = task.outline_parsed %}
+    {% if outline %}
+      {% if outline.titles %}
+      <div class="outline-titles">
+        {% for t in outline.titles %}
+        <div class="outline-title-row">
+          <span class="badge badge-neutral">{{ t.style|default('title') }}</span>
+          <span>{{ t.text }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if outline.sections %}
+      <div class="outline-sections">
+        {% for sec in outline.sections %}
+        <div class="outline-section">
+          <div class="outline-heading">{{ sec.heading|default(sec) }}</div>
+          {% if sec.points %}
+          <ul class="outline-points">
+            {% for p in sec.points %}
+            <li>{{ p }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <pre class="outline-raw">{{ task.outline }}</pre>
+      {% endif %}
+    {% else %}
+    <pre class="outline-raw">{{ task.outline }}</pre>
+    {% endif %}
+  </div>
+</details>
+{% endif %}
+
+{% if task.research_note %}
+<details class="section">
+  <summary>研究笔记</summary>
+  <div class="section-body">
+    <div class="research-note">{{ task.research_note_html|safe }}</div>
+  </div>
+</details>
+{% endif %}
+
+<!-- F. Article content -->
+<hr style="margin:32px 0;border:none;border-top:1px solid var(--border)">
+
+<h2>Article</h2>
+<div class="article-content">
+  {{ article_html|safe }}
+</div>
+
+<div style="margin-top:40px;padding-bottom:40px">
+  <a href="/" class="btn btn-secondary">返回 to List</a>
+</div>
+{% endblock %}

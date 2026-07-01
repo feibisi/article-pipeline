@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}审阅面板{% endblock %} — 文章管线</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <nav class="page-header">
+      <div>
+        <h1><a href="/" style="color:var(--text);text-decoration:none">文章审阅</a></h1>
+        <div class="subtitle">文章量产管线 · 审批面板</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span class="badge badge-neutral">elementary</span>
+      </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+  </div>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

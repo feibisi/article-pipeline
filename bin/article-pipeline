@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Article pipeline CLI — manage the article production pipeline.
+
+Usage:
+  article-pipeline add --keyword "xxx" --category wp-tech [--priority 1]
+  article-pipeline list [--status queued|researching|outlining|writing|reviewing|done|stuck]
+  article-pipeline status <task_id>
+  article-pipeline run    # process next batch of queued tasks
+  article-pipeline continue <task_id>  # resume from current stage
+  article-pipeline recover [--max-minutes 30]  # roll back stuck tasks
+  article-pipeline review # show articles ready for human review
+  article-pipeline publish <task_id>
+  article-pipeline skip <task_id> --reason "..."
+  article-pipeline unpublish <task_id>
+"""
+
+import sys
+import argparse
+from pathlib import Path
+# Ensure the project root (containing article_pipeline/) is on sys.path
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+from article_pipeline.db import init_db, TaskDB
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Article Pipeline CLI")
+    sub = parser.add_subparsers(dest="command")
+
+    # add
+    p_add = sub.add_parser("add")
+    p_add.add_argument("--keyword", required=True)
+    p_add.add_argument("--category", required=True,
+                        choices=["wp-tech", "book-knowledge", "tutorial", "opinion",
+                                 "comparison", "listicle", "guide", "troubleshooting",
+                                 "beginner", "trend", "thought-leadership", "editorial",
+                                 "news", "case-study", "tool-review", "resource-roundup",
+                                 "marketing", "product-launch", "announcement",
+                                 "brand-marketing", "soft-article"])
+    p_add.add_argument("--platform", default="wptea")
+    p_add.add_argument("--priority", type=int, default=1, choices=[1, 2, 3])
+    p_add.add_argument("--allow-duplicate", action="store_true", help="Allow duplicate keywords")
+
+    # list
+    p_list = sub.add_parser("list")
+    p_list.add_argument("--status")
+    p_list.add_argument("--category")
+
+    # status
+    p_status = sub.add_parser("status")
+    p_status.add_argument("task_id", type=int)
+
+    # run
+    p_run = sub.add_parser("run")
+    p_run.add_argument("--limit", type=int, default=5)
+
+    # continue (resume from outline/writing stage)
+    p_cont = sub.add_parser("continue")
+    p_cont.add_argument("task_id", type=int)
+
+    # recover (roll back stuck tasks)
+    p_recover = sub.add_parser("recover")
+    p_recover.add_argument("--max-minutes", type=int, default=30,
+                           help="Consider tasks stuck after this many minutes (default: 30)")
+    p_recover.add_argument("--dry-run", action="store_true",
+                           help="Show what would be recovered without doing it")
+
+    # review
+    p_review = sub.add_parser("review")
+
+    # publish
+    p_pub = sub.add_parser("publish")
+    p_pub.add_argument("task_id", type=int)
+
+    # skip
+    p_skip = sub.add_parser("skip")
+    p_skip.add_argument("task_id", type=int)
+    p_skip.add_argument("--reason", required=True)
+
+    # unpublish
+    p_unpub = sub.add_parser("unpublish")
+    p_unpub.add_argument("task_id", type=int)
+
+    args = parser.parse_args()
+
+    if args.command is None:
+        parser.print_help()
+        sys.exit(1)
+
+    # Ensure DB exists
+    db = TaskDB()
+
+    if args.command == "add":
+        task_id = db.add_task(args.keyword, args.category, args.platform, args.priority, allow_duplicate=args.allow_duplicate)
+        print(f"Task #{task_id} added: {args.keyword} [{args.category}]")
+
+    elif args.command == "list":
+        if args.status == "stuck":
+            tasks = db.get_stuck_tasks()
+            if not tasks:
+                print("No stuck tasks found.")
+            else:
+                print(f"{'ID':<5} {'Status':<14} {'P':<2} {'Category':<16} {'Keyword':<30} {'Stuck Since'}")
+                print("-" * 100)
+                for t in tasks:
+                    print(f"{t['id']:<5} {t['status']:<14} {t['priority']:<2} {t['category']:<16} {t['keyword'][:30]:<30} {t.get('confirmed_at', '?')}")
+        else:
+            tasks = db.list_tasks(status=args.status, category=args.category)
+            print(f"{'ID':<5} {'Status':<14} {'P':<2} {'Category':<16} {'Keyword'}")
+            print("-" * 70)
+            for t in tasks:
+                print(f"{t['id']:<5} {t['status']:<14} {t['priority']:<2} {t['category']:<16} {t['keyword']}")
+
+    elif args.command == "status":
+        task = db.get_task(args.task_id)
+        if task:
+            for k, v in task.items():
+                print(f"{k}: {v}")
+        else:
+            print(f"Task #{args.task_id} not found.")
+
+    elif args.command == "run":
+        from article_pipeline.pipeline import Pipeline
+        pipeline = Pipeline()
+        pipeline.run(limit=args.limit)
+
+    elif args.command == "continue":
+        from article_pipeline.pipeline import Pipeline
+        pipeline = Pipeline()
+        pipeline.resume(args.task_id)
+
+    elif args.command == "recover":
+        if args.dry_run:
+            stuck = db.get_stuck_tasks(max_minutes=args.max_minutes)
+            if not stuck:
+                print("No stuck tasks found.")
+            else:
+                print(f"Found {len(stuck)} stuck task(s) (dry run, no changes made):")
+                for t in stuck:
+                    print(f"  #{t['id']} {t['keyword']} — currently {t['status']}")
+        else:
+            recovered = db.recover_stuck(max_minutes=args.max_minutes)
+            if not recovered:
+                print("No stuck tasks to recover.")
+            else:
+                print(f"Recovered {len(recovered)} task(s):")
+                for r in recovered:
+                    print(f"  #{r['id']} {r['keyword']}: {r['was']} -> {r['rolled_back_to']}")
+
+    elif args.command == "review":
+        from article_pipeline.pipeline import Pipeline
+        pipeline = Pipeline()
+        pipeline.show_review_queue()
+
+    elif args.command == "publish":
+        from article_pipeline.pipeline import Pipeline
+        pipeline = Pipeline()
+        pipeline.publish(args.task_id)
+
+    elif args.command == "skip":
+        db.update_status(args.task_id, "skipped", {"skip_reason": args.reason})
+        print(f"Task #{args.task_id} skipped: {args.reason}")
+
+    elif args.command == "unpublish":
+        from article_pipeline.pipeline import Pipeline
+        pipeline = Pipeline()
+        pipeline.unpublish(args.task_id)
+
+
+if __name__ == "__main__":
+    main()
