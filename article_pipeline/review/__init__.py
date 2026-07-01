@@ -28,6 +28,11 @@ from article_pipeline.review.dbs_ai_check import (
     check_ai_fingerprint,
     generate_ai_report,
 )
+from article_pipeline.topic_filter import (
+    BenchmarkTopicFilter,
+    BenchmarkFilterResult,
+    TopicFilter,
+)
 
 # ────────────────────────────────────────────────────────────────────
 # Existing checks (word count, format, facts, fabrication, semantic)
@@ -853,5 +858,45 @@ def run_self_review(article: str, tier: str = "A",
     results["publish_gate"] = publish_gate
 
     return results
+
+
+# ────────────────────────────────────────────────────────────────────
+# Topic filtering — dbs-benchmark inspired 5-filter method
+# ────────────────────────────────────────────────────────────────────
+
+def filter_topic_by_benchmark(keyword: str,
+                               category: str = "",
+                               search_results: list[dict] = None) -> BenchmarkFilterResult:
+    """选题五重过滤 - dbs-benchmark 启发
+
+    Args:
+        keyword: 选题关键词
+        category: 分类
+        search_results: 搜索结果列表，格式：[{"title": str, "body": str}, ...]
+
+    Returns:
+        BenchmarkFilterResult
+    """
+    bf = BenchmarkTopicFilter(search_results=search_results or [])
+    return bf.filter_topic(keyword, category)
+
+
+def generate_topic_filter_report(keyword: str,
+                                  category: str = "",
+                                  search_results: list[dict] = None) -> str:
+    """生成选题过滤报告
+
+    Args:
+        keyword: 选题关键词
+        category: 分类
+        search_results: 搜索结果列表
+
+    Returns:
+        Markdown 格式的报告
+    """
+    bf = BenchmarkTopicFilter(search_results=search_results or [])
+    return bf.generate_report(keyword, category)
+
+
 # ────────────────────────────────────────────────────────────────────
 # GEO (Generative Engine Optimization) checks — Frase 5-dimension model
