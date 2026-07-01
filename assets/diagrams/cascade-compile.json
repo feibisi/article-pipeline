@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "文章管线 — 级联编译架构",
+    "subtitle": "五层知识编译器",
+    "output": "cascade-compile.html"
+  },
+  "components": [
+    {"id": "input", "type": "external", "label": "知识输入", "sublabel": "cocobook + DDG + 主题索引", "pos": [40, 220], "size": [130, 60]},
+    {"id": "synthesis", "type": "backend", "label": "L1: 理解层", "sublabel": "Synthesis", "pos": [250, 100], "size": [140, 60]},
+    {"id": "framework", "type": "backend", "label": "L2: 方法论层", "sublabel": "Framework", "pos": [250, 280], "size": [140, 60]},
+    {"id": "style", "type": "cloud", "label": "L3: 风格层", "sublabel": "Style Compiler", "pos": [490, 100], "size": [140, 60]},
+    {"id": "prosody", "type": "cloud", "label": "L4: 语感层", "sublabel": "Prosody", "pos": [490, 280], "size": [140, 60]},
+    {"id": "compile", "type": "frontend", "label": "L5: 编译层", "sublabel": "Prompt Assembly", "pos": [720, 190], "size": [140, 60]},
+    {"id": "output", "type": "database", "label": "文章产出", "sublabel": "markdown + 元数据", "pos": [920, 190]},
+    {"id": "genres", "type": "database", "label": "品类域", "sublabel": "21 品类 / 5 文件契约", "pos": [370, 430]},
+    {"id": "review", "type": "security", "label": "质量门控", "sublabel": "value_density + ai_check", "pos": [720, 370]}
+  ],
+  "boundaries": [
+    {"kind": "region", "label": "工程层（硬约束）", "wraps": ["synthesis", "framework", "style", "compile"]},
+    {"kind": "security-group", "label": "创作层（软约束）", "wraps": ["prosody"]}
+  ],
+  "connections": [
+    {"from": "input", "to": "synthesis", "label": "原始素材", "variant": "emphasis", "labelDy": -15},
+    {"from": "synthesis", "to": "framework", "labelDx": 20},
+    {"from": "framework", "to": "compile", "label": "骨架输出", "variant": "emphasis"},
+    {"from": "style", "to": "compile", "label": "约束输出", "labelDy": -15},
+    {"from": "prosody", "to": "compile", "label": "范本输出", "labelDy": 15},
+    {"from": "compile", "to": "output", "label": "文章", "variant": "emphasis"},
+    {"from": "genres", "to": "framework", "label": "方法论", "labelDx": -20},
+    {"from": "genres", "to": "style", "label": "预设", "labelDx": 20},
+    {"from": "genres", "to": "prosody", "label": "范本", "labelDx": 40, "labelDy": -10},
+    {"from": "output", "to": "review", "label": "审查"},
+    {"from": "review", "to": "compile", "label": "修订", "variant": "dashed"}
+  ],
+  "cards": []
+}
