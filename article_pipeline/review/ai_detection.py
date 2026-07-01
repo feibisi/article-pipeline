@@ -188,23 +188,86 @@ LIGHT_TAGS = {
     "filler_em_dash",
 }
 
+# ────────────────────────────────────────────────────────────────────
+# Model-specific weight profiles
+# ────────────────────────────────────────────────────────────────────
+# Weight multipliers per tag for model families.
+# Tags not listed use the default classification (HEAVY/FILLER/LIGHT).
 
-def check_ai_patterns(text: str) -> dict:
-    """Check article for AI-generated text patterns. Returns score 0-10 and flags."""
+GLM_WEIGHT_OVERRIDES = {
+    # GLM tends heavily toward these patterns
+    "translation_not_x_but_y": 1.5,
+    "translation_not_x_is_y": 1.5,
+    "summary_bottom_line": 2.5,       # "归根结底" — GLM favorite
+    "filler_worth_noting": 1.8,
+    "cliche_with_development": 2.5,   # "随着...的发展" — GLM signature
+    "hz_three_item_rule": 2.0,        # excessive 排比
+    "numbered_first_second_last": 2.5,
+    "struct_not_only_but_also": 2.5,
+}
+
+CLAUDE_WEIGHT_OVERRIDES = {
+    # Claude tends toward these patterns
+    "filler_em_dash": 2.0,            # em-dash (——) overuse
+    "filler_worth_noting": 1.2,
+    "filler_important_is": 1.5,       # "需要注意的是" variant
+    "filler_in_other_words": 1.8,     # "换句话说"
+    "over_qualifier": 1.5,            # parenthetical asides, hedging
+    "connector_however": 1.2,
+    "hz_forced_casual": 1.5,          # "让我来..."
+    "qualifier_generally": 1.2,       # balanced hedging
+}
+
+# Combined default (no model specified) — merge both profiles with averaged multipliers
+_DEFAULT_WEIGHT_OVERRIDES = {
+    tag: (GLM_WEIGHT_OVERRIDES.get(tag, 1.0) + CLAUDE_WEIGHT_OVERRIDES.get(tag, 1.0)) / 2
+    for tag in set(GLM_WEIGHT_OVERRIDES) | set(CLAUDE_WEIGHT_OVERRIDES)
+}
+
+
+def _get_weight_overrides(model: str | None) -> dict:
+    """Return weight override dict for the given model family."""
+    if not model:
+        return _DEFAULT_WEIGHT_OVERRIDES
+    model_lower = model.lower()
+    if any(k in model_lower for k in ("glm", "chatglm", "zhipu")):
+        return GLM_WEIGHT_OVERRIDES
+    if any(k in model_lower for k in ("claude", "anthropic", "sonnet", "opus", "haiku")):
+        return CLAUDE_WEIGHT_OVERRIDES
+    return _DEFAULT_WEIGHT_OVERRIDES
+
+
+def check_ai_patterns(text: str, model: str | None = None) -> dict:
+    """Check article for AI-generated text patterns.
+
+    Args:
+        text: Article text to analyze.
+        model: Optional model identifier (e.g. "glm-5.1", "claude-sonnet-4-6")
+               to select model-specific weight profile. If None, uses combined defaults.
+
+    Returns:
+        Dict with score (0-10), flags list, and pass boolean.
+    """
     flags = []
     score = 10
+    weight_overrides = _get_weight_overrides(model)
 
     for pattern, tag in CORE_PATTERNS:
         matches = re.findall(pattern, text)
         if matches:
             flags.append({"pattern": tag, "count": len(matches), "match": matches[0][:60]})
+            # Determine base weight from tag classification
             if tag in HEAVY_TAGS:
-                score -= len(matches) * 2.0
+                base_weight = 2.0
             elif tag in FILLER_TAGS:
-                score -= len(matches) * 0.5
+                base_weight = 0.5
             elif tag in LIGHT_TAGS:
-                # Frequency counters — small signal, not a hard quality hit
-                score -= len(matches) * 0.1
+                base_weight = 0.1
+            else:
+                base_weight = 0.3
+            # Apply model-specific multiplier if available
+            multiplier = weight_overrides.get(tag, 1.0)
+            score -= len(matches) * base_weight * multiplier
 
     for pattern, tag in STRUCTURAL_PATTERNS:
         matches = re.findall(pattern, text, re.MULTILINE)
@@ -230,7 +293,41 @@ def check_ai_patterns(text: str) -> dict:
     )
     if len(three_item) >= 3:
         flags.append({"pattern": "hz_three_item_rule", "count": len(three_item)})
-        score -= 1.5
+        multiplier = weight_overrides.get("hz_three_item_rule", 1.0)
+        score -= 1.5 * multiplier
+
+    # ── Additional patterns (em-dash 3+, filler transitions, repeated "从...角度", comma chains) ──
+
+    # Em-dash (——) appearing 3+ times — strong AI signal
+    em_dash_count = len(re.findall(r"——", text))
+    if em_dash_count >= 3:
+        flags.append({"pattern": "em_dash_overuse", "count": em_dash_count})
+        multiplier = weight_overrides.get("filler_em_dash", 1.0)
+        score -= (em_dash_count - 2) * 0.8 * multiplier
+
+    # "说白了" / "简单来说" as filler transitions
+    filler_transitions = re.findall(r"(?:说白了|简单来说)", text)
+    if filler_transitions:
+        flags.append({"pattern": "filler_transition_colloquial", "count": len(filler_transitions),
+                      "match": filler_transitions[0]})
+        score -= len(filler_transitions) * 0.6
+
+    # "从...角度来看" repeated pattern
+    angle_pattern = re.findall(r"从.{1,10}角度(?:来看|看|出发|而言)", text)
+    if len(angle_pattern) >= 2:
+        flags.append({"pattern": "repeated_angle_pattern", "count": len(angle_pattern),
+                      "match": angle_pattern[0][:40]})
+        score -= (len(angle_pattern) - 1) * 0.8
+
+    # Excessive comma chains: sentences with 4+ commas without period/semicolon break
+    sentences_raw = re.split(r'[。.！!？?\n]', text)
+    comma_chain_count = 0
+    for s in sentences_raw:
+        if s.strip() and s.count('，') + s.count(',') >= 4:
+            comma_chain_count += 1
+    if comma_chain_count >= 2:
+        flags.append({"pattern": "excessive_comma_chains", "count": comma_chain_count})
+        score -= comma_chain_count * 0.5
 
     return {
         "score": max(0, round(score, 1)),
