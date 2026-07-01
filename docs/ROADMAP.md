@@ -144,6 +144,62 @@
 - 一键调整风格坐标并重写
 - 版本间风格对比
 
+### P4 — 系统改造完成后（素材与 Studio 集成）
+
+> 前置条件：级联编译跑通（Phase 2+），FrameworkOutput 包含 visual_anchors 字段
+
+#### T-016: compile 层输出结构化（不只是 markdown）
+- **位置**: `article_pipeline/compile.py`（新建或从 writer.py 拆分）
+- **输出扩展**: 除正文 markdown 外，同时输出结构化 JSON：
+  - `hero_brief`: 封面图意象描述 + mood + dimensions
+  - `visual_anchors`: 来自 FrameworkOutput，每个标注含 position/type/concept
+  - `seo_metadata`: {title, description, keywords, excerpt}
+  - `tags`: 文章标签（从 genre + research 推导）
+  - `cta`: 下一步行动建议（从 framework.next_steps 结构化）
+- **原则**: markdown 仍然是独立完整的产物（纯文本可发布），JSON 元数据是增强层
+- **验证**: pipeline run 输出包含 JSON 元数据文件 + markdown 文件
+
+#### T-017: Studio 视觉协作契约实现
+- **前置**: T-016（compile 输出 visual_anchors）
+- **位置**: 新建 `article_pipeline/visual.py`
+- **功能**:
+  1. 从 compile 输出提取 visual_anchors → 构建 visual_brief JSON
+  2. 通过 NATS 发送到 `vm.studio.visual-request`
+  3. 监听 `vm.elementary.visual-response` 接收资产
+  4. 将收到的资产路径写入文章元数据
+- **契约版本**: v2.0（含 request_id/requester/budget/usage 审计字段）
+- **审计**: 每次请求/响应追加到 `logs/visual-assets.jsonl`
+- **验证**: 端到端一次"文章 + 封面图"通过 NATS 完成
+
+#### T-018: Studio prompts 新增 xiaohei-scenes domain
+- **执行者**: Studio（elementary 提需求，Studio 实现）
+- **内容**:
+  1. 在 Studio `data/domains/` 新增 `xiaohei-scenes/` 目录
+  2. 从 GitHub 仓库提取核心规则（style-dna/object-patterns/master-selection/prompt-template）
+  3. 转换为 prompts 标准域格式（vocabulary.yaml + rules.yaml + examples/）
+  4. compose 流程中 `reference_domain="xiaohei-scenes"` 时激活
+- **验证**: 输入中文文章概述 → compose 输出符合 xiaohei-scenes 风格的英文 prompt
+- **协作方式**: elementary 通过 NATS vm-dm 发 task-request 给 studio
+
+#### T-019: 截图自动化（与质检管线对接）
+- **前置**: T-016（visual_anchors 含 screenshot_target 字段）
+- **评估**: 新建独立截图管线 vs 复用现有 Pinchtab + play-smoke/Playwright
+- **最小实现**:
+  1. visual_anchors 中 `visual_type="screenshot"` 的条目提取 URL
+  2. 调用 Pinchtab API 截图 → img-process 优化 → 存入 assets 目录
+  3. 将截图路径回写到文章元数据
+- **延伸**: 教程类文章如果步骤中有明确 URL，可在 pipeline run 时自动截取
+- **验证**: 一篇教程文章自动产出 3+ 张步骤截图
+
+#### T-020: OG/社交分享卡自动生成
+- **前置**: T-017（Studio 契约跑通）
+- **内容**: 每篇文章发布时自动请求 Studio 生成：
+  - OG image (1200x630) — 用于社交分享预览
+  - Social card (1:1) — 微信朋友圈
+- **触发**: publish 阶段自动追加 visual_brief（role=og_image/social_card）
+- **模板化**: 品牌内容用品牌模板，技术文章用通用模板
+- **验证**: 发布流程结束时 OG image 路径已填入元数据
+
 ---
 
 ## 依赖关系
@@ -164,6 +220,12 @@ T-007 (映射降级) — 独立，无依赖
 T-008 (调度器) — 独立，T-005 完成后效果更好
 T-011 (创意写作) — 独立，等书籍采购
 T-012 (UI) — 依赖 T-006
+
+T-016 (compile 结构化输出) — 依赖级联编译 Phase 2 完成
+T-017 (Studio 协作) — 依赖 T-016
+T-018 (xiaohei domain) — Studio 侧独立，elementary 发 task-request 触发
+T-019 (截图自动化) — 依赖 T-016（visual_anchors 字段）
+T-020 (OG/社交卡) — 依赖 T-017
 ```
 
 ## 验收标准

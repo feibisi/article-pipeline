@@ -425,44 +425,145 @@ Inkwell = cocobook（知识） + creative-core（人格/能力） + genre pipeli
 
 ## 与 Studio 的协作契约（草案）
 
+### 设计原则：AI 原生 + 可复用 + 双向感知
+
+跨 VM 协作的核心问题：**资源消耗透明化**。elementary 请求生图用的是 Studio 的 API 额度和计算资源，双方必须知道发生了什么。
+
+```
+原则 1: 请求方声明意图和预算，执行方决定如何完成
+原则 2: 每次资源消耗都有审计记录（谁触发、用了什么模型、花了多少）
+原则 3: 契约可被其他 VM 复用（modiqi 也可能需要配图）
+原则 4: 异步为主，不阻塞文章产出流程
+```
+
 ### elementary → studio 契约
 
 ```yaml
 contract: elementary-to-studio
-trigger: article_published OR visual_brief_ready
+version: "2.0"
+trigger: visual_brief_ready
 format: JSON via NATS
+channel: vm.studio.visual-request
+
 fields:
   type: "visual_brief"
+  request_id: string              # 唯一请求 ID（追踪+去重）
+  requester: string               # "elementary"（谁发的）
   article_id: string
-  brand: string                    # wenpai / modiqi / ...
+  brand: string                   # wenpai / modiqi / feibisi
   title: string
-  summary: string                  # 50 字以内摘要
-  key_visual_concept: string       # 核心视觉意象描述
-  mood: string                     # 从 style 坐标推导的氛围词
-  dimensions:
-    ratio: string                  # "16:9" (blog header) / "1:1" (social)
-  constraints:
-    avoid: list[string]            # 文章中明确不应出现的视觉元素
-  priority: int                    # 1=普通 2=重要 3=紧急
+  summary: string                 # 50 字以内摘要
+
+  # 素材需求清单（一次请求可含多张图）
+  assets_requested:
+    - role: string                # hero_image / inline_figure / social_card / og_image
+      visual_type: string         # "scene" / "diagram" / "brand" / "data_chart"
+      concept: string             # 核心视觉意象描述（给 prompts compose 的输入）
+      mood: string                # 从 style 坐标推导的氛围词
+      dimensions:
+        ratio: string             # "16:9" / "1:1" / "1200x630"
+      constraints:
+        require: list[string]     # 必须包含的视觉元素
+        avoid: list[string]       # 不应出现的视觉元素
+      reference_domain: string    # prompts 系统的域提示（如 "xiaohei-scenes"）
+
+  # 资源感知字段
+  budget:
+    priority: int                 # 1=普通 2=重要 3=紧急
+    max_cost_hint: string         # "low"(免费模型优先) / "medium" / "high"(最佳效果)
+    deadline: string              # ISO8601，超时则标记 timeout（null=不急）
+  
+  # 上下文（Studio 可用来做更好的图）
+  context:
+    genre: string                 # 文章品类
+    style_vector: dict            # 5 维坐标（供 mood 推导验证）
+    target_platform: string       # 发布平台（决定尺寸/风格）
 ```
 
 ### studio → elementary 契约
 
 ```yaml
 contract: studio-to-elementary
-trigger: asset_ready
+version: "2.0"
+trigger: asset_ready OR asset_failed
 format: JSON via NATS
+channel: vm.elementary.visual-response
+
 fields:
-  type: "asset_delivered"
-  article_id: string
+  type: "asset_delivered" | "asset_failed" | "asset_progress"
+  request_id: string              # 对应请求 ID
+  
+  # 交付内容
   assets:
-    - path: string                 # NAS 路径
-      role: string                 # hero_image / inline_figure / social_card
+    - role: string                # hero_image / inline_figure / social_card
+      path: string                # NAS 路径（/mnt/shared-context/assets/...）
       dimensions: {width: int, height: int}
-      format: string               # webp / png
-  status: "ready" | "needs_revision"
-  notes: string                    # 可选备注
+      format: string              # webp / png / svg
+      quality_score: float        # prompts quality_gate 分数
+      model_used: string          # "lovart/xxx" / "gpt-image-2" / "gemini-3.1"
+  
+  # 资源审计
+  usage:
+    model: string                 # 使用的模型
+    api_calls: int                # API 调用次数（含重试）
+    estimated_cost: string        # "~$0.04" 或 "free"(本地模型)
+    generation_time_ms: int       # 生成耗时
+  
+  status: "ready" | "needs_revision" | "failed" | "timeout"
+  failure_reason: string | null   # 失败原因（status != ready 时）
+  notes: string | null            # 可选备注
 ```
+
+### 审计与感知机制
+
+```yaml
+# Studio 侧：每次为外部请求生图，追加到审计日志
+# ~/shared/audit/visual-requests.jsonl
+{
+  "request_id": "elem-art-20260701-001",
+  "requester": "elementary",
+  "time": "2026-07-01T14:30:00+08:00",
+  "model": "lovart/anon-bob",
+  "api_calls": 2,
+  "estimated_cost": "$0.08",
+  "quality_score": 0.78,
+  "status": "delivered"
+}
+
+# elementary 侧：每次收到交付，追加到本地审计
+# ~/Projects/article-pipeline/logs/visual-assets.jsonl
+{
+  "article_id": "wp-object-cache-tutorial",
+  "request_id": "elem-art-20260701-001",
+  "assets_received": 2,
+  "total_cost": "$0.12",
+  "time": "2026-07-01T14:32:00+08:00"
+}
+```
+
+### 与 Studio shared/interfaces/ 的对接
+
+Studio 已有 `~/shared/interfaces/contracts.md` 定义了 prompts→image-gen 的内部接口。我们的 visual_brief 应该映射到 Studio 已有的输入格式：
+
+```
+elementary visual_brief
+  → Studio 接收后转换为 prompts compose 输入
+  → prompts 编译出 {prompt, negative, dimensions, analysis, quality_gate}
+  → image-gen 调度生图
+  → 回传资产 + 审计记录
+```
+
+elementary 不需要关心 Studio 内部如何路由模型——只声明意图、品质要求和预算提示。Studio 自主决定用哪个后端。
+
+### xiaohei-scenes 集成路径（Studio 侧待办）
+
+xiaohei-scenes 作为 Studio prompts 系统的新 domain 集成：
+
+1. 在 `data/domains/` 新增 `xiaohei-scenes/` 目录
+2. 从 GitHub 仓库提取核心规则：style-dna、object-patterns、master-selection、prompt-template
+3. 转换为 prompts 系统的标准域格式（vocabulary.yaml + rules.yaml + examples/）
+4. compose 流程中 reference_domain="xiaohei-scenes" 时激活该域的术语和规则
+5. 验证：输入一段中文文章概述 → compose 输出符合 xiaohei-scenes 风格规范的英文 prompt
 
 ---
 
