@@ -170,6 +170,13 @@ class Pipeline:
                                       {"skip_reason": f"outline_failed: {outline['error']}"})
             return None
 
+        # Skip low-value topics flagged by the takeaway check
+        takeaway = (outline.get("takeaway") or "").strip()
+        if takeaway.startswith("SKIP:"):
+            print(f"  [outline] SKIPPED: {takeaway}")
+            self.db.update_status(task_id, "skipped", {"skip_reason": takeaway})
+            return None
+
         # Save outline as JSON
         outline_json = json.dumps(outline, ensure_ascii=False, indent=2)
         self.db.save_stage_output(task_id, "outline", outline_json)

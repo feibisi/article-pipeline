@@ -154,7 +154,8 @@ Tier 由 category 自动判断：
 # ~/.config/article-pipeline/config.yaml
 deepseek:
   base_url: "https://api.z.ai/api/anthropic"
-  model: "glm-5.1"
+  writing_model: "claude-sonnet-4-20250514"  # 写作阶段首选模型（经 z.ai 转发地址）；未配置则用下方 model
+  model: "glm-5.1"                            # 提纲/研究阶段模型，也是写作阶段的 fallback
   temperature: 0.7
 
 mcp:

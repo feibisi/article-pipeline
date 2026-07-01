@@ -418,6 +418,8 @@ def _call_with_fallback(system_prompt: str, user_prompt: str,
 
     endpoints = [
         (ds.get("base_url", "https://api.z.ai/api/anthropic"),
+         ds.get("writing_model", "claude-sonnet-4-20250514")),
+        (ds.get("base_url", "https://api.z.ai/api/anthropic"),
          ds.get("model", "glm-5.1")),
         (ds.get("fallback_url", "https://api.deepseek.com/anthropic"),
          ds.get("fallback_model", "deepseek-v4-pro")),
