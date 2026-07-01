@@ -13,6 +13,8 @@ from article_pipeline.db import TaskDB
 from article_pipeline.research import gather_research, build_research_note
 from article_pipeline.synthesis import run_synthesis
 from article_pipeline.framework import run_framework
+from article_pipeline.prosody import run_prosody
+from article_pipeline.compile import run_compile
 from article_pipeline.outline import generate_outline, format_outline_for_review
 from article_pipeline.writer import write_article, write_article_claude, get_trust_tier
 from article_pipeline.review import run_self_review, compute_publish_gate
@@ -73,7 +75,13 @@ class Pipeline:
                         r = self.process_framework(tid)
                         if r:
                             results.append(r)
-                            r = self.process_outline(tid)
+                            r = self.process_prosody(tid)
+                            if r:
+                                results.append(r)
+                                r = self.process_compile(tid)
+                                if r:
+                                    results.append(r)
+                                    r = self.process_outline(tid)
                             if r:
                                 results.append(r)
                                 r = self.process_writing(tid)
@@ -249,6 +257,101 @@ class Pipeline:
             "tool-review": "tool_review",
         }
         return mapping.get(category.lower(), "tutorial")
+
+    def process_prosody(self, task_id: int) -> dict | None:
+        """Stage 4: Prosody layer — inject rhythm and style samples."""
+        task = self.db.get_task(task_id)
+        print(f"  [prosody] Loading samples...")
+
+        # Load style preset for genre
+        from article_pipeline.style import get_preset_dict
+        genre = self._map_category_to_genre(task["category"])
+        style_dict = get_preset_dict(genre)
+
+        # Convert dict to StyleOutput-like structure
+        from article_pipeline.contracts import StyleOutput
+        style_output = StyleOutput(
+            vector=style_dict,
+            constraints={},  # Constraints not in style vector, use genre rules
+            rendered_instructions="",
+            aesthetic_concepts=[],
+        )
+
+        prosody = run_prosody(style_output, genre)
+
+        # Save prosody output
+        prosody_json = json.dumps({
+            "sample_type": prosody.sample_type,
+            "samples": prosody.samples,
+            "negative_constraints": prosody.negative_constraints,
+            "rhythm_hint": prosody.rhythm_hint,
+            "freeform_note": prosody.freeform_note,
+        }, ensure_ascii=False)
+        self.db.save_stage_output(task_id, "prosody", prosody_json)
+
+        self.db.update_status(task_id, "compiling")
+        print(f"  [prosody] Done — type: {prosody.sample_type}, samples: {len(prosody.samples)}")
+
+        return {"task_id": task_id, "stage": "prosody", "sample_type": prosody.sample_type}
+
+    def process_compile(self, task_id: int) -> dict | None:
+        """Stage 5: Compile layer — assemble final writer prompt."""
+        task = self.db.get_task(task_id)
+        print(f"  [compile] Assembling prompt...")
+
+        # Load all layer outputs
+        import json as _j
+        framework_data = _j.loads(task.get("framework", "{}"))
+        prosody_data = _j.loads(task.get("prosody", "{}"))
+
+        # Reconstruct data objects
+        from article_pipeline.contracts import FrameworkOutput, ProsodyOutput, StyleOutput
+        framework = FrameworkOutput(
+            method=framework_data.get("method", ""),
+            structure=framework_data.get("structure", []),
+            takeaway=framework_data.get("takeaway", ""),
+            reader_entry_state=framework_data.get("reader_entry_state", ""),
+            reader_exit_state=framework_data.get("reader_exit_state", ""),
+            visual_anchors=framework_data.get("visual_anchors"),
+            freeform_note=framework_data.get("freeform_note", ""),
+        )
+
+        prosody = ProsodyOutput(
+            samples=prosody_data.get("samples", []),
+            sample_type=prosody_data.get("sample_type", ""),
+            negative_constraints=prosody_data.get("negative_constraints", ""),
+            rhythm_hint=prosody_data.get("rhythm_hint", ""),
+            freeform_note=prosody_data.get("freeform_note", ""),
+        )
+
+        # Get style preset
+        from article_pipeline.style import get_preset_dict
+        genre = self._map_category_to_genre(task["category"])
+        style_dict = get_preset_dict(genre)
+        style = StyleOutput(
+            vector=style_dict,
+            constraints={},  # Constraints from genre rules, not style vector
+            rendered_instructions="",
+            aesthetic_concepts=[],
+        )
+
+        # Build material from synthesis
+        synthesis_data = _j.loads(task.get("synthesis", "{}"))
+        material = {
+            "evidence_for": synthesis_data.get("evidence_for", []),
+            "evidence_against": synthesis_data.get("evidence_against", []),
+        }
+
+        # Compile final prompt
+        prompt = run_compile(framework, style, prosody, material, task["keyword"], task["category"])
+
+        # Save compiled prompt
+        self.db.save_stage_output(task_id, "compiled_prompt", prompt)
+
+        self.db.update_status(task_id, "outlining")
+        print(f"  [compile] Done — prompt length: {len(prompt)} chars")
+
+        return {"task_id": task_id, "stage": "compile", "prompt_length": len(prompt)}
 
     def process_outline(self, task_id: int) -> dict | None:
         """Stage 3: Generate outline from research."""
