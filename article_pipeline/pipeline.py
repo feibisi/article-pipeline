@@ -1,4 +1,7 @@
-"""Pipeline orchestrator — ties together all stages of article production."""
+"""Pipeline orchestrator — ties together all stages of article production.
+
+Cascade architecture: research → synthesis → framework → style → prosody → compile → write → review → publish
+"""
 from article_pipeline.config import load_config
 from article_pipeline.text_utils import fix_em_dashes
 import os
@@ -8,9 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from article_pipeline.db import TaskDB
 from article_pipeline.research import gather_research, build_research_note
+from article_pipeline.synthesis import run_synthesis
+from article_pipeline.framework import run_framework
 from article_pipeline.outline import generate_outline, format_outline_for_review
 from article_pipeline.writer import write_article, write_article_claude, get_trust_tier
-from article_pipeline.review import run_self_review
+from article_pipeline.review import run_self_review, compute_publish_gate
 from article_pipeline.publish import publish_to_wp
 
 RUNS_DIR = Path.home() / "workspaces" / "article-pipeline" / "runs"
@@ -62,15 +67,21 @@ class Pipeline:
                 r = self.process_research(tid)
                 if r:
                     results.append(r)
-                    r = self.process_outline(tid)
+                    r = self.process_synthesis(tid)
                     if r:
                         results.append(r)
-                        r = self.process_writing(tid)
+                        r = self.process_framework(tid)
                         if r:
                             results.append(r)
-                            r = self.process_review(tid)
+                            r = self.process_outline(tid)
                             if r:
                                 results.append(r)
+                                r = self.process_writing(tid)
+                                if r:
+                                    results.append(r)
+                                    r = self.process_review(tid)
+                                    if r:
+                                        results.append(r)
             except Exception as e:
                 print(f"  FAILED: {e}")
                 self.db.update_status(tid, "skipped",
@@ -139,11 +150,105 @@ class Pipeline:
         note = build_research_note(task["keyword"], sources)
 
         self.db.save_stage_output(task_id, "research_note", note)
-        self.db.update_status(task_id, "outlining")
+        self.db.update_status(task_id, "synthesizing")
         print(f"  [research] Done — {len(note)} chars, "
               f"{len(sources.get('cocobook', []))} book results")
 
         return {"task_id": task_id, "stage": "research", "note_length": len(note)}
+
+    def process_synthesis(self, task_id: int) -> dict | None:
+        """Stage 2.5: Synthesis layer — extract core judgment from research."""
+        task = self.db.get_task(task_id)
+        print(f"  [synthesis] Analyzing...")
+
+        # Build sources dict from research_note
+        sources = {"research_note": task.get("research_note", "")}
+
+        synthesis = run_synthesis(sources, task["keyword"])
+
+        if not synthesis or not synthesis.core_judgment:
+            print(f"  [synthesis] SKIPPED: No core judgment formed")
+            self.db.update_status(task_id, "skipped",
+                                  {"skip_reason": "synthesis_no_judgment"})
+            return None
+
+        # Save synthesis output
+        synthesis_json = json.dumps({
+            "core_judgment": synthesis.core_judgment,
+            "evidence_for": synthesis.evidence_for,
+            "evidence_against": synthesis.evidence_against,
+            "conflicts": synthesis.conflicts,
+            "unique_claims": synthesis.unique_claims,
+            "differentiation": synthesis.differentiation,
+            "confidence": synthesis.confidence,
+            "freeform_note": synthesis.freeform_note,
+        }, ensure_ascii=False)
+        self.db.save_stage_output(task_id, "synthesis", synthesis_json)
+
+        self.db.update_status(task_id, "framework")
+        print(f"  [synthesis] Done — judgment: {synthesis.core_judgment[:50]}...")
+        print(f"  [synthesis] Confidence: {synthesis.confidence:.2f}")
+
+        return {"task_id": task_id, "stage": "synthesis", "confidence": synthesis.confidence}
+
+    def process_framework(self, task_id: int) -> dict | None:
+        """Stage 3: Framework layer — build methodology-driven structure."""
+        task = self.db.get_task(task_id)
+        print(f"  [framework] Building structure...")
+
+        # Load synthesis output
+        synthesis_json = task.get("synthesis", "{}")
+        from article_pipeline.contracts import SynthesisOutput
+        import json as _j
+        synthesis_data = _j.loads(synthesis_json)
+
+        synthesis = SynthesisOutput(
+            core_judgment=synthesis_data.get("core_judgment", ""),
+            evidence_for=synthesis_data.get("evidence_for", []),
+            evidence_against=synthesis_data.get("evidence_against", []),
+            conflicts=synthesis_data.get("conflicts", []),
+            unique_claims=synthesis_data.get("unique_claims", []),
+            differentiation=synthesis_data.get("differentiation", ""),
+            confidence=synthesis_data.get("confidence", 0.0),
+            freeform_note=synthesis_data.get("freeform_note", ""),
+        )
+
+        # Get genre from category (simplified mapping)
+        genre = self._map_category_to_genre(task["category"])
+
+        framework = run_framework(synthesis, genre)
+
+        # Save framework output
+        framework_json = json.dumps({
+            "method": framework.method,
+            "structure": framework.structure,
+            "takeaway": framework.takeaway,
+            "reader_entry_state": framework.reader_entry_state,
+            "reader_exit_state": framework.reader_exit_state,
+            "visual_anchors": framework.visual_anchors,
+            "freeform_note": framework.freeform_note,
+        }, ensure_ascii=False)
+        self.db.save_stage_output(task_id, "framework", framework_json)
+
+        self.db.update_status(task_id, "outlining")
+        print(f"  [framework] Done — method: {framework.method}, sections: {len(framework.structure)}")
+
+        return {"task_id": task_id, "stage": "framework", "method": framework.method}
+
+    def _map_category_to_genre(self, category: str) -> str:
+        """Map pipeline category to genre identifier."""
+        # Simplified mapping
+        mapping = {
+            "tutorial": "tutorial",
+            "guide": "guide",
+            "comparison": "comparison",
+            "opinion": "opinion",
+            "troubleshooting": "troubleshooting",
+            "case-study": "case_study",
+            "beginner": "beginner",
+            "tool-review": "tool_review",
+        }
+        return mapping.get(category.lower(), "tutorial")
 
     def process_outline(self, task_id: int) -> dict | None:
         """Stage 3: Generate outline from research."""
