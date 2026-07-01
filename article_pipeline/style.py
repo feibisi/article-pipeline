@@ -154,7 +154,7 @@ def render_injection(vector: StyleVector) -> str:
         return ""
     if vector.injection == Injection.SUBTLE:
         return "## 文风要求（轻量校准，遵守即可）\n" + "\n".join(
-            f"- {inst}" for inst in instructions[:2]
+            f"- {inst}" for inst in [instructions[0], instructions[4]]
         )
     return "## 文风要求（以下指令决定文章的语气和节奏，必须遵守）\n" + "\n".join(
         f"- {inst}" for inst in instructions

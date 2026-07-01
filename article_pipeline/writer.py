@@ -367,8 +367,11 @@ def _build_writer_prompt(keyword: str, category: str, outline: dict,
         output_requirements += '- **外部产品文章**：每个事实陈述必须能在参考素材中找到来源。找不到就跳过。\n'
 
     style_block = render_style_block(category, style_overrides)
-    style_prefix = f"\n{style_block}\n" if style_block else "\n"
-    return f"""{_genre_rules(category, tier)}{style_prefix}
+    if style_block:
+        style_prefix = f"\n{style_block}\n\n> 注意：上方风格指令与下方体裁规则冲突时，以体裁规则为准。\n\n"
+    else:
+        style_prefix = "\n"
+    return f"""{style_prefix}{_genre_rules(category, tier)}
 {samples_block}{anchor_block}## 文章信息
 - 标题: {title}
 - 关键词: {keyword}
