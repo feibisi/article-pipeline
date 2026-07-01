@@ -61,7 +61,39 @@
   3. 研究素材里有没有反直觉数据
 - **规则**: 三个 check 全否 → 标记为 low_value，不自动排入队列
 - **集成点**: `article-pipeline add` 命令中调用，输出过滤建议
+- **新增**: slop 饱和度检查（D2）— DDG 前 10 结果同质度分析
 - **验证**: 用 10 个已发布文章的 keyword 回测，看过滤器是否合理
+
+#### T-013: value_density 评分维度（反 slop 核心）
+- **位置**: 新建 `article_pipeline/review/value_density.py`
+- **5 项检测**:
+  1. 独占信息比 — 文中 claim 在 DDG 前 10 结果中未出现的比例（>20%）
+  2. 可验证操作 — 含具体命令/代码/URL/版本号的段落占比（>30%）
+  3. 素材引用深度 — 引用了 cocobook 几个不同来源（>=3）
+  4. 判断句密度 — 有明确立场的陈述（>=2 per H2）
+  5. 反直觉度 — 主张与主流搜索结果相反且有证据（>=1）
+- **输出**: 0-10 分，权重 0.12（从 humanizer 分 0.06 + ai_check 分 0.06）
+- **硬门控**: value_density < 4.0 → 不可发布（是 slop）
+- **集成点**: `review/__init__.py` 的 `run_self_review()` 和 `compute_overall_score()`
+- **验证**: 用已发布 5 篇文章 + 3 篇已知 slop 文章跑分，确认区分度
+
+#### T-014: outline differentiation 字段
+- **位置**: `article_pipeline/outline.py` 的 OUTLINE_PROMPT
+- **变更**: outline 输出结构新增 `differentiation` 必填字段
+- **定义**: "这篇文章比搜索第一页的结果多给读者什么"
+- **闸门**: differentiation 为空或太泛（<20字/无具体信息）→ 不进入写作阶段
+- **合法答案示例**:
+  - "基于 cocobook 3 本书的交叉对比，搜索结果都只引用了官方文档"
+  - "包含 elementary 实测的性能数据，搜索结果都是理论描述"
+  - "指出了官方推荐做法在特定场景下的反效果，无人提及"
+- **验证**: 用 5 个选题跑 outline，检查 differentiation 质量
+
+#### T-015: research 模块 unique_claims 输出
+- **位置**: `article_pipeline/research.py`
+- **变更**: research 输出增加 `unique_claims` 字段
+- **逻辑**: 对 cocobook 返回的标注，与 DDG 搜索结果做差集，标记哪些 claim 是搜索结果里没有的
+- **用途**: 供 writer prompt 强调这些独特素材；供 T-013 评分使用
+- **验证**: 跑 3 个 keyword 的 research，检查 unique_claims 是否合理标记
 
 ### P2 — 本月完成（系统闭环）
 
@@ -123,7 +155,11 @@ T-003 ─┘
         └─→ T-006（compliance 评分需要正确的风格指令作为基线）
               └─→ T-009, T-010（维度优化需要 compliance 数据）
 
-T-005 (选题过滤器) — 独立，无依赖
+T-013 (value_density) — 独立，优先级最高（定义"什么值得发布"）
+T-014 (differentiation) — 独立，与 T-013 配合但不依赖
+T-015 (unique_claims) — 独立，T-013 评分时可选使用
+
+T-005 (选题过滤器) — 独立，含 D2 slop 饱和度检查
 T-007 (映射降级) — 独立，无依赖
 T-008 (调度器) — 独立，T-005 完成后效果更好
 T-011 (创意写作) — 独立，等书籍采购
@@ -137,10 +173,17 @@ T-012 (UI) — 依赖 T-006
 - subtle 品类 render 输出包含 density + edge 指令（而非 density + warmth）
 - 对同一 keyword 写两版文章（修复前/后），genre_rules 在冲突时被 LLM 优先遵循
 
+### Phase D 完成标志（T-013 + T-014 + T-015）— 反 slop 基线
+- value_density 评分能区分已发布文章（>6.0）和已知 slop（<4.0）
+- outline 输出包含 differentiation 字段且内容具体（>20字，含具体信息）
+- research 输出包含 unique_claims 列表且非空
+- 发布必要条件检查集成到 review 流程，不满足任何一条 → 自动拒绝
+
 ### Phase 1 完成标志（T-003 + T-004 + T-005）
 - beginner 文章不再出现"结尾不总结全文"的审美指令
 - brand-marketing 文章不再出现过于犀利的判断句
 - 选题过滤器对 10 个测试 keyword 输出合理的过滤建议
+- slop 饱和度检查能识别出"已被同质内容淹没"的关键词
 
 ### Phase 2 完成标志（T-006 + T-007 + T-008）
 - review 结果中有 style_compliance 分数

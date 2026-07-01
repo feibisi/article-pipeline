@@ -8,6 +8,7 @@
 |------|------|------|
 | [SYSTEM-DEFINITION.md](SYSTEM-DEFINITION.md) | 系统是什么、为什么这样设计、三层控制模型、品类体系 | 所有人 |
 | [STYLE-SYSTEM.md](STYLE-SYSTEM.md) | 文风格调系统技术说明书：五维坐标、注入分层、API | 开发/调参 |
+| [ARCHITECTURE-GAPS.md](ARCHITECTURE-GAPS.md) | 架构缺层分析：synthesis/framework/prosody 三层缺失诊断与重构方向 | 架构决策 |
 
 ## 日常操作（动手时看这些）
 
@@ -19,7 +20,8 @@
 
 | 文档 | 用途 | 读者 |
 |------|------|------|
-| [EVOLUTION-PLAN.md](EVOLUTION-PLAN.md) | A/B/C 三条发展路径、实施排期、成功标准 | 决策者 |
+| [OVERHAUL-PLAN.md](OVERHAUL-PLAN.md) | 完整改造执行方案：级联编译、可插拔品类域、实施表、验收标准、Studio 协作契约 | 执行者/决策者 |
+| [EVOLUTION-PLAN.md](EVOLUTION-PLAN.md) | A/B/C/D 四条发展路径、反 slop 策略、架构备忘 | 决策者 |
 | [ROADMAP.md](ROADMAP.md) | 近期执行任务清单（P0~P3）、依赖关系、验收标准 | 执行者 |
 | [STYLE-AUDIT.md](STYLE-AUDIT.md) | 风格系统审计：已知问题、改进建议 | 开发 |
 
@@ -39,6 +41,12 @@
 | #3693 | 文风格调: 5维坐标系替代 if-else 体裁规则 | decision |
 | #3691 | LLM 编造根因：writer prompt 冲突 + outline 截断 | lesson |
 | #2932 | 内容日历：掘金+V2EX+wpcommunity+linuxjoy | doc |
+| #4203 | article-pipeline 不再局限 WP，核心竞争力定义 | decision |
+| #4204 | 过度工程化教训：4 个月 0 产出 | lesson |
+| #4205 | 即时执行计划：Claude 换模型 + 本周跑 5 篇 | decision |
+| #4206 | 反 slop 策略：value_density 评分 + differentiation 闸门 | decision |
+| #4207 | 写作管线架构缺三层：synthesis/framework/prosody | decision |
+| #4208 | 创作系统架构：独立管线 + 共享核心库(creative-core) | decision |
 
 ## 文档维护规则
 
