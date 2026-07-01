@@ -23,6 +23,11 @@ from article_pipeline.review.ai_detection import (
 )
 from article_pipeline.review.geo import check_geo
 from article_pipeline.review.value_density import assess_value_density
+from article_pipeline.review.dbs_ai_check import (
+    DbsAIChecker,
+    check_ai_fingerprint,
+    generate_ai_report,
+)
 
 # ────────────────────────────────────────────────────────────────────
 # Existing checks (word count, format, facts, fabrication, semantic)
@@ -332,6 +337,52 @@ def check_jargon(article: str) -> dict:
     }
 
 
+def check_dbs_ai(article: str) -> dict:
+    """dbs-ai-check: 22 AI 特征检测
+
+    Returns:
+        {
+            "score": 0-10,
+            "hits": int,
+            "strong": int,
+            "medium": int,
+            "weak": int,
+            "details": list[dict],
+            "pass": bool
+        }
+    """
+    checker = DbsAIChecker(article)
+    hits = checker.check_all()
+
+    strong = sum(1 for h in hits if h.severity == "strong")
+    medium = sum(1 for h in hits if h.severity == "medium")
+    weak = sum(1 for h in hits if h.severity == "weak")
+
+    # 评分：强信号 -2 分，中信号 -1 分，弱信号 -0.5 分
+    score = 10 - (strong * 2) - (medium * 1) - (weak * 0.5)
+    score = max(0, min(10, score))
+
+    details = []
+    for hit in hits[:10]:  # 最多返回 10 处
+        details.append({
+            "feature_id": hit.feature_id,
+            "feature_name": hit.feature_name,
+            "severity": hit.severity,
+            "text": hit.text[:80],
+            "reason": hit.reason[:100],
+        })
+
+    return {
+        "score": round(score, 1),
+        "hits": len(hits),
+        "strong": strong,
+        "medium": medium,
+        "weak": weak,
+        "details": details,
+        "pass": score >= 6.0
+    }
+
+
 def _extract_claims(article: str) -> list[str]:
     sentences = re.split(r'[。.！!？?\n]', article)
     claims = []
@@ -389,13 +440,14 @@ def check_semantic_facts(article: str, threshold: float = 0.9) -> dict:
 
 def compute_overall_score(results: dict) -> float:
     """Weighted overall quality score from review results."""
-    weights = {"ai_check": 0.15, "format": 0.07, "fabrication": 0.15,
-               "cross_reference": 0.12, "semantic_facts": 0.10,
-               "word_count": 0.07, "humanizer": 0.27, "jargon": 0.07}
+    weights = {"ai_check": 0.10, "dbs_ai": 0.15, "format": 0.05, "fabrication": 0.15,
+               "cross_reference": 0.10, "semantic_facts": 0.08,
+               "word_count": 0.05, "humanizer": 0.22, "jargon": 0.10}
     # GEO is advisory — not in weighted score
     cross_ref = results.get("cross_reference")
     scores = {
         "ai_check": results.get("ai_check", {}).get("score", 0),
+        "dbs_ai": results.get("dbs_ai", {}).get("score", 5),
         "format": 7.0 if results.get("format", {}).get("pass") else 3.0,
         "fabrication": results.get("fabrication", {}).get("score", 0),
         "cross_reference": cross_ref.get("score", 10) if cross_ref else 10,
@@ -534,6 +586,43 @@ def generate_revision_suggestions(results: dict) -> list[dict]:
                 "fix": f"扩充到至少 {wc.get('min_required', 1000)} 字"
             })
 
+    # dbs-ai-check suggestions
+    dbs = results.get("dbs_ai", {})
+    # 如果 dbs_ai 不通过，或者有 hits 且分数 < 8.0，则生成建议
+    if dbs and (not dbs.get("pass", True) or (dbs.get("hits", 0) > 0 and dbs.get("score", 10) < 8.0)):
+        strong = dbs.get("strong", 0)
+        medium = dbs.get("medium", 0)
+        weak = dbs.get("weak", 0)
+        details = dbs.get("details", [])
+
+        # 按特征分组建议
+        feature_fixes = {
+            "堵住所有反驳": "只留真的被人问过的反驳，删除想象出来的",
+            "匀速排比": "把最想说的那一句加长，打破均匀节奏",
+            "让步模板反复用": "第二遍之后换说法或直接跳过",
+            "命名仪式": "只留真正精准的名字，删掉仪式感",
+            "不是X是Y高密度": "只留一次翻转，其他直接说Y",
+            "开头三件套": "从真正想让读者知道的事开始说",
+            "连接词过度使用": "删掉一半，读者自己能感觉到话锋变了",
+            "翻译腔": "用嘴上会说的词来写",
+            "虚假讲故事": "换一个真实的经历，或补充具体细节",
+            "结尾祝福": "删掉最后一段，文章已经结束了",
+            "过拟合深刻": "实操问题不需要升维到哲学层面",
+        }
+
+        fix_list = []
+        for d in details[:5]:
+            name = d.get("feature_name", "")
+            fix = feature_fixes.get(name, d.get("reason", "重写该句")[:50])
+            fix_list.append(f"{name}: {fix}")
+
+        suggestions.append({
+            "category": "ai_fingerprint",
+            "priority": "high" if strong > 0 else "medium",
+            "issue": f"dbs-ai-check 检出 {dbs.get('hits', 0)} 处 AI 指纹（🔴{strong}强 ⚠️{medium}中 💡{weak}弱），评分 {dbs.get('score', 0)}/10",
+            "fix": "; ".join(fix_list)
+        })
+
     # Jargon/insider slang suggestions
     jargon = results.get("jargon", {})
     if jargon and not jargon.get("pass", True):
@@ -659,6 +748,7 @@ def run_self_review(article: str, tier: str = "A",
                     differentiation: str = "") -> dict:
     """Run all self-review checks and return consolidated results."""
     ai_check = check_ai_patterns(article)
+    dbs_ai = check_dbs_ai(article)  # dbs-ai-check: 22 AI 特征检测
     word_check = check_word_count(article, tier)
     format_check = check_format(article)
     fact_check = check_facts(article, research_note or "")
@@ -677,6 +767,7 @@ def run_self_review(article: str, tier: str = "A",
 
     all_pass = all([
         ai_check.get("pass", False),
+        dbs_ai.get("pass", True),  # dbs_ai 是软指标，不强制阻止发布
         word_check.get("pass", False),
         format_check.get("pass", False),
         fact_check.get("pass", True),
@@ -693,8 +784,12 @@ def run_self_review(article: str, tier: str = "A",
     if humanizer.get("total", 0) < 30:
         all_pass = False
 
+    # Soft gate: dbs_ai score < 4.0 → 严重 AI 味，警告
+    dbs_ai_low = dbs_ai.get("score", 10) < 4.0
+
     results = {
         "ai_check": ai_check,
+        "dbs_ai": dbs_ai,
         "word_count": word_check,
         "format": format_check,
         "facts": fact_check,
@@ -706,7 +801,8 @@ def run_self_review(article: str, tier: str = "A",
         "geo": geo_check,
         "value_density": value_density,
         "cross_reference": cross_ref,
-        "overall_pass": all_pass,
+        "overall_pass": all_pass and not dbs_ai_low,  # dbs_ai_low 时需要人工审查
+        "dbs_ai_warning": dbs_ai_low,
     }
 
     # Style-humanizer alignment
