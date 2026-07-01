@@ -6,6 +6,7 @@ from article_pipeline.review import (
     check_word_count,
     check_format,
     run_self_review,
+    compute_publish_gate,
 )
 
 
@@ -83,3 +84,178 @@ WP Rocket 是商业插件中的标杆。售价 $59/年。
     assert "word_count" in result
     assert "format" in result
     assert "overall_pass" in result
+
+
+class TestComputePublishGate:
+    """Tests for compute_publish_gate function."""
+
+    def test_fail_low_value_density(self):
+        """value_density < 4.0 should fail regardless of other signals."""
+        value_density = {
+            "overall_score": 3.5,
+            "recommendation": "fail",
+        }
+        result = compute_publish_gate(
+            value_density_result=value_density,
+            has_differentiation=True,
+            has_unique_claims=True,
+        )
+        assert result["decision"] == "fail"
+        assert "内容密度不足" in result["reason"]
+        assert len(result["blocking_reasons"]) == 1
+
+    def test_needs_human_mid_density_no_signals(self):
+        """value_density 4.0~6.0 with no differentiation/unique_claims → needs_human."""
+        value_density = {
+            "overall_score": 5.0,
+            "recommendation": "needs_human",
+        }
+        result = compute_publish_gate(
+            value_density_result=value_density,
+            has_differentiation=False,
+            has_unique_claims=False,
+        )
+        assert result["decision"] == "needs_human"
+        assert "需人工判断" in result["reason"]
+        # Should have blocking reasons
+        assert len(result["blocking_reasons"]) > 0
+
+    def test_pass_by_value_density(self):
+        """value_density >= 6.0 alone should pass."""
+        value_density = {
+            "overall_score": 6.5,
+            "recommendation": "pass",
+        }
+        result = compute_publish_gate(
+            value_density_result=value_density,
+            has_differentiation=False,
+            has_unique_claims=False,
+        )
+        assert result["decision"] == "pass"
+        assert "发布条件满足" in result["reason"]
+        assert len(result["blocking_reasons"]) == 0
+
+    def test_pass_by_differentiation(self):
+        """differentiation alone can compensate mid-level density."""
+        value_density = {
+            "overall_score": 5.5,
+            "recommendation": "needs_human",
+        }
+        result = compute_publish_gate(
+            value_density_result=value_density,
+            has_differentiation=True,
+            has_unique_claims=False,
+        )
+        assert result["decision"] == "pass"
+        assert "差异化说明" in result["reason"]
+
+    def test_pass_by_unique_claims(self):
+        """unique_claims alone can compensate mid-level density."""
+        value_density = {
+            "overall_score": 5.5,
+            "recommendation": "needs_human",
+        }
+        result = compute_publish_gate(
+            value_density_result=value_density,
+            has_differentiation=False,
+            has_unique_claims=True,
+        )
+        assert result["decision"] == "pass"
+        assert "独到见解" in result["reason"]
+
+    def test_signals_structure(self):
+        """Result should contain all three signals."""
+        value_density = {
+            "overall_score": 7.0,
+            "recommendation": "pass",
+        }
+        result = compute_publish_gate(
+            value_density_result=value_density,
+            has_differentiation=True,
+            has_unique_claims=True,
+        )
+        signals = result["signals"]
+        assert "value_density" in signals
+        assert "differentiation" in signals
+        assert "unique_claims" in signals
+        assert signals["value_density"] == 7.0
+        assert signals["differentiation"] is True
+        assert signals["unique_claims"] is True
+
+
+class TestPublishGateIntegration:
+    """Tests for publish_gate integration in run_self_review."""
+
+    def test_publish_gate_present_in_results(self):
+        """run_self_review should include publish_gate field."""
+        article = """## 测试标题
+
+这是一篇测试文章。包含足够的内容来通过基本检查。
+
+## 第二部分
+
+更多内容。""" + "测试内容。" * 100
+
+        result = run_self_review(article, tier="A")
+        assert "publish_gate" in result
+        gate = result["publish_gate"]
+        assert "decision" in gate
+        assert "reason" in gate
+        assert "signals" in gate
+        assert gate["decision"] in ("pass", "needs_human", "fail")
+
+    def test_publish_gate_with_differentiation(self):
+        """differentiation parameter should affect publish_gate."""
+        article = "## 测试\n" + "内容。" * 200
+        research_output = {
+            "sources": {},
+            "research_note": "测试研究笔记",
+            "unique_claims": [],
+        }
+
+        # Without differentiation
+        result = run_self_review(
+            article,
+            tier="A",
+            research_output=research_output,
+            differentiation="",
+        )
+        assert result["publish_gate"]["signals"]["differentiation"] is False
+
+        # With differentiation
+        result = run_self_review(
+            article,
+            tier="A",
+            research_output=research_output,
+            differentiation="本文基于实测数据，对比了3种方案的性能，搜索结果均未提及",
+        )
+        assert result["publish_gate"]["signals"]["differentiation"] is True
+
+    def test_publish_gate_with_unique_claims(self):
+        """unique_claims in research_output should affect publish_gate."""
+        article = "## 测试\n" + "内容。" * 200
+        research_output_with_claims = {
+            "sources": {},
+            "research_note": "测试研究笔记",
+            "unique_claims": ["这是第一个独到见解", "这是第二个独到见解"],
+        }
+
+        result = run_self_review(
+            article,
+            tier="A",
+            research_output=research_output_with_claims,
+        )
+        assert result["publish_gate"]["signals"]["unique_claims"] is True
+
+    def test_publish_gate_boundary_value_density(self):
+        """Test boundary conditions for value_density."""
+        # Low quality article should get fail
+        slop_article = """
+## 测试
+
+这是一篇文章。
+"""
+        result = run_self_review(slop_article, tier="A")
+        # slop article should have low value_density
+        if result["value_density"]["overall_score"] < 4.0:
+            assert result["publish_gate"]["decision"] == "fail"

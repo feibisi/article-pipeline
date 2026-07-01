@@ -1,0 +1,13 @@
+domain: news
+name: 新闻
+description: 快速报道重要事件
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 新闻
+- 快讯
+- 报道
+trust_tier: INTERNAL
+injection_level: none
+preferred_framework: inverted_pyramid
+fallback_framework: step_by_step

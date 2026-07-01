@@ -1,0 +1,14 @@
+domain: guide
+name: 指南
+description: 系统化解决某一类问题
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 指南
+- 手册
+- 详解
+- 方法
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: problem_solving
+fallback_framework: step_by_step

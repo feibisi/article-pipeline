@@ -1,0 +1,14 @@
+domain: listicle
+name: 清单
+description: 结构化知识要点集合
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 清单
+- 推荐
+- 集合
+- 必备
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: progressive_list
+fallback_framework: step_by_step

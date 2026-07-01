@@ -2,6 +2,9 @@
 
 > 更新: 2026-07-01 | 状态追踪: elementary VM state.json
 
+> 本文档定位: 执行级任务清单（Task-level，含具体验证方法和依赖关系）。
+> 架构设计方案见 OVERHAUL-PLAN.md；长期发展方向见 EVOLUTION-PLAN.md。
+
 ## 当前状态
 
 - Pipeline v0.3.0 已跑通全链路（research → outline → write → review → publish）
@@ -15,22 +18,22 @@
 
 ## 任务优先级
 
-### P0 — 立即修复（阻碍系统正确运行）
+### M0 — 立即修复（阻碍系统正确运行）
 
-#### T-001: 修复 subtle 级别维度选取 bug
+#### T-001: 修复 subtle 级别维度选取 bug [已完成]
 - **文件**: `article_pipeline/style.py:155-157`
 - **问题**: `instructions[:2]` 取了 density + warmth，设计要求取 density + edge
 - **修复**: 改为 `[instructions[0], instructions[4]]`
 - **影响**: 6 个 subtle 品类的风格指令全部错误
 - **验证**: `pytest tests/test_article_pipeline/test_style.py -k subtle` + 手动检查输出
 
-#### T-002: 修复 prompt 顺序/优先级声明
+#### T-002: 修复 prompt 顺序/优先级声明 [已完成]
 - **文件**: `article_pipeline/writer.py:371`
 - **问题**: genre_rules 在 style_block 前面，与"后面优先级更高"的设计意图矛盾
 - **方案**: 在 genre_rules 块开头加显式优先级声明："以下体裁规则优先级高于上方风格指令，冲突时以此为准。"
 - **验证**: 对比修改前后同一 keyword 的产出差异
 
-### P1 — 本周完成（显著提升产出质量）
+### M1 — 本周完成（显著提升产出质量）
 
 #### T-003: 审美概念品类适配
 - **文件**: `article_pipeline/style.py` 的 `render_aesthetic_concepts()`
@@ -73,7 +76,7 @@
   4. 判断句密度 — 有明确立场的陈述（>=2 per H2）
   5. 反直觉度 — 主张与主流搜索结果相反且有证据（>=1）
 - **输出**: 0-10 分，权重 0.12（从 humanizer 分 0.06 + ai_check 分 0.06）
-- **硬门控**: value_density < 4.0 → 不可发布（是 slop）
+- **门控（三档）**: value_density < 4.0 → 硬拦截（是 slop，不可发布）；4.0 ~ 6.0 → 需人工判断；>= 6.0 → 推荐发布
 - **集成点**: `review/__init__.py` 的 `run_self_review()` 和 `compute_overall_score()`
 - **验证**: 用已发布 5 篇文章 + 3 篇已知 slop 文章跑分，确认区分度
 
@@ -95,7 +98,7 @@
 - **用途**: 供 writer prompt 强调这些独特素材；供 T-013 评分使用
 - **验证**: 跑 3 个 keyword 的 research，检查 unique_claims 是否合理标记
 
-### P2 — 本月完成（系统闭环）
+### M2 — 本月完成（系统闭环）
 
 #### T-006: 新增 check_style_compliance() 评分
 - **位置**: `article_pipeline/review/__init__.py`
@@ -121,7 +124,19 @@
   - 不足时通过 NATS 通知 modiqi："本周 wpcommunity 缺 1 篇选题"
 - **不自动添加选题**: 调度器只做提醒，选题仍需人工/过滤器确认
 
-### P3 — 后续迭代（优化与扩展）
+#### T-021: 发布决策集成（publish_gate）
+- **位置**: `article_pipeline/review/__init__.py`
+- **背景**: T-013(value_density) + T-014(differentiation) + T-015(unique_claims) 各自独立，但"汇入发布决策"缺少统一 owner
+- **功能**: 
+  1. 聚合三个信号: value_density 分数 + differentiation 非空 + unique_claims 非空
+  2. 检查"发布必要条件"（至少满足一条，见 EVOLUTION-PLAN D4）
+  3. 输出 publish_gate: pass/fail/needs_human
+  4. fail 时附带原因（"value_density 不足" / "无差异化" / "无独占素材"）
+- **集成点**: review 完成后、publish 前自动检查
+- **依赖**: T-013 + T-014 + T-015
+- **验证**: 用 5 篇已知 slop + 5 篇高质量文章跑 publish_gate，确认区分度
+
+### M3 — 后续迭代（优化与扩展）
 
 #### T-009: density 维度重定义
 - 评估两条路径（改名 vs 重写规则），选择后实施
@@ -144,7 +159,7 @@
 - 一键调整风格坐标并重写
 - 版本间风格对比
 
-### P4 — 系统改造完成后（素材与 Studio 集成）
+### M4 — 系统改造完成后（素材与 Studio 集成）
 
 > 前置条件：级联编译跑通（Phase 2+），FrameworkOutput 包含 visual_anchors 字段
 
@@ -218,6 +233,7 @@ T-015 (unique_claims) — 独立，T-013 评分时可选使用
 T-005 (选题过滤器) — 独立，含 D2 slop 饱和度检查
 T-007 (映射降级) — 独立，无依赖
 T-008 (调度器) — 独立，T-005 完成后效果更好
+T-021 (发布决策) — 依赖 T-013 + T-014 + T-015
 T-011 (创意写作) — 独立，等书籍采购
 T-012 (UI) — 依赖 T-006
 
@@ -230,24 +246,24 @@ T-020 (OG/社交卡) — 依赖 T-017
 
 ## 验收标准
 
-### Phase 0 完成标志（T-001 + T-002）
+### M0 完成标志（T-001 + T-002）
 - `pytest tests/` 全绿
 - subtle 品类 render 输出包含 density + edge 指令（而非 density + warmth）
 - 对同一 keyword 写两版文章（修复前/后），genre_rules 在冲突时被 LLM 优先遵循
 
-### Phase D 完成标志（T-013 + T-014 + T-015）— 反 slop 基线
+### MD 完成标志（T-013 + T-014 + T-015）— 反 slop 基线
 - value_density 评分能区分已发布文章（>6.0）和已知 slop（<4.0）
 - outline 输出包含 differentiation 字段且内容具体（>20字，含具体信息）
 - research 输出包含 unique_claims 列表且非空
 - 发布必要条件检查集成到 review 流程，不满足任何一条 → 自动拒绝
 
-### Phase 1 完成标志（T-003 + T-004 + T-005）
+### M1 完成标志（T-003 + T-004 + T-005）
 - beginner 文章不再出现"结尾不总结全文"的审美指令
 - brand-marketing 文章不再出现过于犀利的判断句
 - 选题过滤器对 10 个测试 keyword 输出合理的过滤建议
 - slop 饱和度检查能识别出"已被同质内容淹没"的关键词
 
-### Phase 2 完成标志（T-006 + T-007 + T-008）
+### M2 完成标志（T-006 + T-007 + T-008）
 - review 结果中有 style_compliance 分数
 - overall_score 公式包含 style_compliance 权重
 - 每周一能收到选题缺口提醒（NATS 消息）

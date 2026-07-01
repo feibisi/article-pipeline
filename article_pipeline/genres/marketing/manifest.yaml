@@ -1,0 +1,13 @@
+domain: marketing
+name: 营销
+description: 传达产品价值并促进行动
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 营销
+- 推广
+- 销售
+trust_tier: INTERNAL
+injection_level: subtle
+preferred_framework: pain_point_hook
+fallback_framework: step_by_step

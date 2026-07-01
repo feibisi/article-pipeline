@@ -1,0 +1,14 @@
+domain: resource-roundup
+name: 资源
+description: 精选资源清单和学习路径
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 资源
+- 推荐
+- 工具
+- 合集
+trust_tier: INTERNAL
+injection_level: subtle
+preferred_framework: curated_path
+fallback_framework: step_by_step

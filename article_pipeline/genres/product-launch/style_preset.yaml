@@ -1,0 +1,22 @@
+vector:
+  density: -0.2
+  warmth: 0.4
+  energy: 0.4
+  register: -0.1
+  edge: 0.6
+constraints:
+  purpose: 为文章定义风格约束
+  require:
+  - 有明确的观点或结论
+  - 用具体例子说明
+  allow: []
+  avoid:
+  - 空洞的铺垫
+  - 没有实际内容
+model_calibration:
+  glm:
+    edge: 0.1
+    energy: 0.1
+  claude:
+    warmth: -0.1
+    register: -0.1

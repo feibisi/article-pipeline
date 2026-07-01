@@ -1,0 +1,14 @@
+domain: opinion
+name: 观点
+description: 传递明确判断，引发思考或争论
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 观点
+- 看法
+- 思考
+- 分析
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: steel_man_refutation
+fallback_framework: step_by_step

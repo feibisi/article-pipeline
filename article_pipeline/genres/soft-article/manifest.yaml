@@ -1,0 +1,13 @@
+domain: soft-article
+name: 软文
+description: 伪装成内容的技术分析
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 软文
+- 广告
+- 推广
+trust_tier: INTERNAL
+injection_level: subtle
+preferred_framework: content_first
+fallback_framework: step_by_step

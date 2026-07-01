@@ -2,6 +2,8 @@
 
 > 2026-07-01 | 可执行的完整方案，不是愿景文档。
 > 前置文档：ARCHITECTURE-GAPS.md（诊断）、EVOLUTION-PLAN.md（路径规划）
+> 本文档定位: Phase 级架构规划（设计方案 + 验收标准）。不含具体时间排期。
+> 执行级任务清单见 ROADMAP.md；方向级发展规划见 EVOLUTION-PLAN.md。
 
 ---
 
@@ -97,7 +99,8 @@ Layer 4: PROSODY（语感注入）
 Layer 5: COMPILE（最终编译）
   输入: FrameworkOutput + StyleOutput + ProsodyOutput + validated material（精选素材）
   输出: 完整 writer prompt
-  门控: prompt token 超限 → 按优先级裁剪素材（validated material 最先被裁）
+  门控: prompt token 超限 → 按优先级裁剪（validated material 最先被裁）
+  说明: validated material 是 compile 的输入之一，不是独立层。"素材最后注入"指的是在 compile 组装时素材排在 prompt 最后位置（LLM 注意力分配考虑）。
 ```
 
 ### 类型化契约
@@ -111,7 +114,7 @@ class SynthesisOutput:
     evidence_against: list[dict]
     conflicts: list[dict]       # [{source_a, source_b, claim_a, claim_b, resolution}]
     unique_claims: list[str]    # DDG 前 10 结果中找不到的 claim
-    differentiation: str        # 比搜索第一页多给读者什么
+    differentiation: str        # 比搜索第一页多给读者什么（生成于 synthesis，门控在 outline 阶段验证）
     confidence: float           # 0-1，synthesis 对自己判断的信心
 
 # Layer 2 → Layer 5
@@ -122,6 +125,8 @@ class FrameworkOutput:
     takeaway: str               # 一句话卖点
     reader_entry_state: str     # 读者进来时认为什么（要被翻转或确认的）
     reader_exit_state: str      # 读者出去时应该理解什么
+    visual_anchors: list[dict] | None = None  # [{section_role, concept, visual_type, screenshot_target?, diagram_spec?}]
+    # visual_anchors 设计意图: Phase 5 素材集成时激活，当前阶段为 None
 
 # Layer 3 → Layer 5
 @dataclass
@@ -132,6 +137,7 @@ class StyleOutput:
     aesthetic_concepts: list[str]  # 适用的审美概念子集
 
 # Layer 4 → Layer 5
+# Layer 4 → Layer 5（创作层：范本引导，允许偏离，不做强制合规检查）
 @dataclass
 class ProsodyOutput:
     samples: list[str]          # 2-3 个语感范本段落
@@ -347,6 +353,11 @@ source_books:
 | value_density 评分（T-013） | review/value_density.py | 区分已发布文章(>6) vs slop(<4) | 无（独立） |
 | differentiation 字段（T-014） | outline prompt 改造 | outline 输出包含具体 differentiation | synthesis.py |
 
+**门控类别说明**: 
+- 纯规则硬门控（确定性）: 句式禁令、字段非空、字数达标
+- LLM 辅助硬门控（有误判可能）: 独占信息比、反直觉度 — 这类检测依赖 DDG 搜索结果和 LLM claim 提取，有不稳定性。实施时需加 confidence 阈值，低置信度时降级为 advisory 而非硬拦截。
+- Advisory（参考）: 正向质量信号、GEO 评分
+
 ### Phase 2: Framework 层（第 5-6 周）
 
 | 任务 | 产出物 | 验证标准 | 依赖 |
@@ -366,6 +377,8 @@ source_books:
 | style_compliance 评分（T-006） | 验证产出是否遵循了语感指令 | 5 维度各有量化检查 | Phase 2 完成 |
 
 ### Phase 4: 解耦 + 验证（月 3）
+
+> 注意: creative-core 解耦在只有一个消费者（article-pipeline）时不做。等第二条管线真正开工、明确了共享需求后再提取。过早解耦几乎必然产生错误的抽象边界。Phase 4 的前置条件是：第二条管线的需求已明确。
 
 | 任务 | 产出物 | 验证标准 | 依赖 |
 |------|--------|----------|------|
@@ -424,6 +437,8 @@ Inkwell = cocobook（知识） + creative-core（人格/能力） + genre pipeli
 ---
 
 ## 与 Studio 的协作契约（草案）
+
+> 状态: 设计意图文档。当前不实施，Phase 4+ 对接时再固化为实施规格。两边都没有实现代码前，此契约仅供参考方向，预期对接时会根据实际需求调整。
 
 ### 设计原则：AI 原生 + 可复用 + 双向感知
 
@@ -555,15 +570,9 @@ elementary visual_brief
 
 elementary 不需要关心 Studio 内部如何路由模型——只声明意图、品质要求和预算提示。Studio 自主决定用哪个后端。
 
-### xiaohei-scenes 集成路径（Studio 侧待办）
+### xiaohei-scenes 集成路径
 
-xiaohei-scenes 作为 Studio prompts 系统的新 domain 集成：
-
-1. 在 `data/domains/` 新增 `xiaohei-scenes/` 目录
-2. 从 GitHub 仓库提取核心规则：style-dna、object-patterns、master-selection、prompt-template
-3. 转换为 prompts 系统的标准域格式（vocabulary.yaml + rules.yaml + examples/）
-4. compose 流程中 reference_domain="xiaohei-scenes" 时激活该域的术语和规则
-5. 验证：输入一段中文文章概述 → compose 输出符合 xiaohei-scenes 风格规范的英文 prompt
+详见 ROADMAP T-018。执行者为 Studio，elementary 通过 NATS 发 task-request 触发。
 
 ---
 
@@ -579,7 +588,28 @@ xiaohei-scenes 作为 Studio prompts 系统的新 domain 集成：
 6. **value_density > 6.0**: 产出文章的独占信息比 > 20%
 7. **creative-core 解耦**: article-pipeline 依赖 creative-core 但不硬编码在内
 8. **Studio 契约跑通**: 至少一次"文章 + 配图"联合产出通过 NATS 完成
-9. **A/B 验证**: 改造前后同选题对比，改造后胜出 >= 7/10
+9. **可消融 A/B 验证**: 改造前后对比 + 单层贡献度量化
+   - **对照组设计**: 每层独立开关，测试 8 种配置
+     ```python
+     ABLATION_CONFIG = {
+         "synthesis": True,    # Layer 1 开关
+         "framework": True,    # Layer 2 开关
+         "style": True,        # Layer 3 开关
+         "prosody": True,      # Layer 4 开关
+     }
+     # 对照组矩阵
+     # - 0001: 只有 prosody
+     # - 0010: 只有 style
+     # - 0100: 只有 framework
+     # - 1000: 只有 synthesis
+     # - 1111: 全部开启（完整系统）
+     # - 0000: 全部关闭（旧模式 baseline）
+     ```
+   - **验收标准**:
+     - 每层独立贡献度可量化（value_density 提升幅度）
+     - 完整系统(1111) vs 单层系统(0001/0010/0100/1000)对比数据
+     - 单层开关对质量的影响曲线（可视化）
+     - 改造后(1111) vs 旧模式(0000)胜出 >= 7/10
 10. **20 篇端到端**: 至少 20 篇文章从选题到发布走完全流程，人工审核通过率 > 70%
 
 ---

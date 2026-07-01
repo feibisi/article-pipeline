@@ -1,0 +1,14 @@
+domain: brand-marketing
+name: 品牌
+description: 建立认知而非直接卖产品
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 品牌
+- 营销
+- 推广
+- 认知
+trust_tier: INTERNAL
+injection_level: subtle
+preferred_framework: problem_hook
+fallback_framework: step_by_step

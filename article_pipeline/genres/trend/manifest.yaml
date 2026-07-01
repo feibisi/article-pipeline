@@ -1,0 +1,14 @@
+domain: trend
+name: 趋势
+description: 基于数据呈现行业趋势
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 趋势
+- 发展
+- 方向
+- 预测
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: data_foundation
+fallback_framework: step_by_step

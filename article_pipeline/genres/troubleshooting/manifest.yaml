@@ -1,0 +1,15 @@
+domain: troubleshooting
+name: 排错
+description: 按排查顺序解决故障问题
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 排错
+- 故障
+- 错误
+- 问题
+- 解决
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: diagnostic_path
+fallback_framework: step_by_step

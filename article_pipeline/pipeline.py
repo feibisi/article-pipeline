@@ -429,3 +429,189 @@ class Pipeline:
         self.db.update_status(task_id, "done",
                               {"published_url": result.get("url", "")})
         print(f"  Published: {result.get('url', 'unknown')}")
+
+    def add_task(self, keyword: str, category: str = "wp-tech",
+                 platform: str = "wptea", priority: int = 2,
+                 allow_duplicate: bool = False, skip_filter: bool = False):
+        """Add a new task with optional topic filtering.
+
+        Args:
+            keyword: Article topic keyword
+            category: Category (default: wp-tech)
+            platform: Target platform (default: wptea)
+            priority: Priority 1-5 (default: 2)
+            allow_duplicate: Allow duplicate keywords
+            skip_filter: Skip topic filter check
+
+        Returns:
+            Task ID or None if rejected
+        """
+        # Run topic filter unless explicitly skipped
+        if not skip_filter:
+            print(f"[filter] Checking topic value: '{keyword}' [{category}]")
+            from article_pipeline.topic_filter import filter_topic
+            filter_result = filter_topic(keyword, category, mock_search=False)
+
+            recommendation = filter_result.get("recommendation", "low_value")
+            reason = filter_result.get("reason", "")
+            checks = filter_result.get("checks", {})
+
+            print(f"[filter] Result: {recommendation.upper()}")
+            print(f"[filter] Reason: {reason}")
+            print(f"[filter] Checks:")
+            print(f"  - Homogeneity: score={checks.get('homogeneity', {}).get('score', '?')}, "
+                  f"verdict={checks.get('homogeneity', {}).get('verdict', False)}")
+            print(f"  - Contrarian: has={checks.get('contrarian', {}).get('has', False)}, "
+                  f"verdict={checks.get('contrarian', {}).get('verdict', False)}")
+            print(f"  - Counter-intuitive: has={checks.get('counter_intuitive', {}).get('has', False)}, "
+                  f"verdict={checks.get('counter_intuitive', {}).get('verdict', False)}")
+
+            # Store filter result in meta for reference
+            filter_meta = {
+                "filter_result": filter_result,
+                "filtered_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            if recommendation == "reject":
+                print(f"[filter] Topic rejected. Use --skip-filter to override.")
+                return None
+            elif recommendation == "low_value":
+                print(f"[filter] Topic marked as low_value. Use --skip-filter to add anyway.")
+                # Still add to queue but with low priority and filter metadata
+                priority = max(priority, 4)  # Bump to low priority
+        else:
+            filter_meta = {}
+
+        # Add the task
+        task_id = self.db.add_task(
+            keyword=keyword,
+            category=category,
+            platform=platform,
+            priority=priority,
+            allow_duplicate=allow_duplicate
+        )
+
+        if task_id:
+            # Store filter metadata if any
+            if filter_meta:
+                import json as _j
+                meta = _j.loads(self.db.conn.execute(
+                    "SELECT meta_json FROM tasks WHERE id=?", (task_id,)
+                ).fetchone()[0] or "{}")
+                meta.update(filter_meta)
+                self.db.conn.execute(
+                    "UPDATE tasks SET meta_json=? WHERE id=?",
+                    (_j.dumps(meta, ensure_ascii=False), task_id)
+                )
+                self.db.conn.commit()
+
+            print(f"[add] Task #{task_id} created: '{keyword}' [{category}] (priority={priority})")
+        else:
+            print(f"[add] Task not created (duplicate or filtered out)")
+
+        return task_id
+
+
+def main():
+    """CLI entry point for article-pipeline."""
+    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Article Pipeline — from keywords to WordPress posts",
+        prog="ap"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Add command
+    add_parser = subparsers.add_parser("add", help="Add a new article task")
+    add_parser.add_argument("keyword", help="Article topic keyword")
+    add_parser.add_argument("-c", "--category", default="wp-tech",
+                            help="Category (default: wp-tech)")
+    add_parser.add_argument("-p", "--platform", default="wptea",
+                            help="Target platform (default: wptea)")
+    add_parser.add_argument("-P", "--priority", type=int, default=2,
+                            help="Priority 1-5 (default: 2)")
+    add_parser.add_argument("--allow-duplicate", action="store_true",
+                            help="Allow duplicate keywords")
+    add_parser.add_argument("--skip-filter", action="store_true",
+                            help="Skip topic filter check")
+
+    # Run command
+    run_parser = subparsers.add_parser("run", help="Process queued tasks")
+    run_parser.add_argument("-l", "--limit", type=int, default=5,
+                            help="Max tasks to process (default: 5)")
+
+    # Resume command
+    resume_parser = subparsers.add_parser("resume", help="Resume a stuck task")
+    resume_parser.add_argument("task_id", type=int, help="Task ID to resume")
+
+    # Approve outline command
+    approve_parser = subparsers.add_parser("approve-outline", help="Approve outline for TIER_EXTERNAL task")
+    approve_parser.add_argument("task_id", type=int, help="Task ID to approve")
+
+    # Publish command
+    publish_parser = subparsers.add_parser("publish", help="Publish an approved article")
+    publish_parser.add_argument("task_id", type=int, help="Task ID to publish")
+
+    # Review queue command
+    subparsers.add_parser("review-queue", help="Show articles awaiting review")
+
+    # Unpublish command
+    unpublish_parser = subparsers.add_parser("unpublish", help="Revert a published task to reviewing")
+    unpublish_parser.add_argument("task_id", type=int, help="Task ID to unpublish")
+
+    # List command
+    list_parser = subparsers.add_parser("list", help="List tasks")
+    list_parser.add_argument("-s", "--status", help="Filter by status")
+    list_parser.add_argument("-c", "--category", help="Filter by category")
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    pipeline = Pipeline()
+
+    if args.command == "add":
+        task_id = pipeline.add_task(
+            keyword=args.keyword,
+            category=args.category,
+            platform=args.platform,
+            priority=args.priority,
+            allow_duplicate=args.allow_duplicate,
+            skip_filter=args.skip_filter
+        )
+        if task_id:
+            print(f"Created task #{task_id}")
+        else:
+            sys.exit(1)
+
+    elif args.command == "run":
+        results = pipeline.run(limit=args.limit)
+        if results:
+            print(f"\nProcessed {len(results)} tasks")
+
+    elif args.command == "resume":
+        pipeline.resume(args.task_id)
+
+    elif args.command == "approve-outline":
+        pipeline.approve_outline(args.task_id)
+
+    elif args.command == "publish":
+        pipeline.publish(args.task_id)
+
+    elif args.command == "review-queue":
+        pipeline.show_review_queue()
+
+    elif args.command == "unpublish":
+        pipeline.unpublish(args.task_id)
+
+    elif args.command == "list":
+        tasks = pipeline.db.list_tasks(status=args.status, category=args.category)
+        if not tasks:
+            print("No tasks found.")
+        else:
+            for t in tasks:
+                print(f"#{t['id']:3d} | {t['status']:12s} | {t['category']:15s} | {t['keyword']}")

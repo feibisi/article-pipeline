@@ -1,0 +1,13 @@
+domain: book-knowledge
+name: 知识
+description: 基于书籍的知识体系整理
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 知识
+- 整理
+- 总结
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: knowledge_synthesis
+fallback_framework: step_by_step

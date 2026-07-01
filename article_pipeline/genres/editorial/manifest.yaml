@@ -1,0 +1,14 @@
+domain: editorial
+name: 社论
+description: 对事件表态并呼吁行动
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 评论
+- 社论
+- 观点
+- 态度
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: position_action
+fallback_framework: step_by_step

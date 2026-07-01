@@ -1,0 +1,39 @@
+# Genre Domain 契约定义
+# 每个品类目录必须包含以下文件
+
+manifest:
+  required: true
+  fields:
+    - domain           # 品类ID
+    - name             # 中文名称
+    - description      # 一句话描述
+    - version          # 版本号
+    - status           # validated/draft
+    - trigger_keywords  # 触发关键词列表
+    - trust_tier       # INTERNAL/EXTERNAL
+    - injection_level  # none/subtle/full
+    - preferred_framework
+    - fallback_framework
+
+framework:
+  required: true
+  fields:
+    - name             # 方法论名
+    - description      # 原理说明
+    - structure        # 段落角色定义
+    - anti_patterns    # 反模式列表
+
+style_preset:
+  required: true
+  fields:
+    - vector           # 5维坐标
+    - constraints      # {require, allow, avoid}
+    - model_calibration # 模型校准偏移
+
+genre_rules:
+  required: true
+  description: "硬性写作规则，从 writer.py _genre_rules 迁出"
+
+prosody_samples:
+  required: true
+  description: "语感范本目录，至少1个.txt文件"

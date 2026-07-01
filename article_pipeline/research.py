@@ -9,6 +9,17 @@ import requests
 import yaml
 from pathlib import Path
 from urllib.parse import urlparse
+from dataclasses import dataclass, field
+from typing import Callable
+
+
+@dataclass
+class ResearchOutput:
+    """Structured research output with unique claims detection."""
+    keyword: str  # Search keyword
+    sources: dict  # Raw sources from gather_research()
+    research_note: str  # Compiled research note
+    unique_claims: list[str] = field(default_factory=list)  # DDG 前 10 结果中找不到的 claim
 
 
 AI_PATTERNS = [
@@ -308,6 +319,66 @@ def _search_annotations(keyword: str, category: str, limit: int = 6) -> list[dic
         return results
     except sqlite3.Error:
         return []
+
+
+def extract_unique_claims(cocobook_annotations: list, ddg_results: list[dict]) -> list[str]:
+    """从 cocobook 标注中提取 unique claims。
+
+    逻辑：
+    1. cocobook_annotations 是从 cocobook MCP 返回的标注列表
+    2. ddg_results 是 DDG 搜索返回的前 10 个结果的摘要/标题
+    3. 对每个 annotation claim，检查是否在 ddg_results 中出现
+    4. 未出现 → 加入 unique_claims
+
+    简单实现：用 claim 关键词匹配 ddg_results，如果无重叠则认为 unique
+    """
+    if not cocobook_annotations:
+        return []
+
+    # 构建 DDG 搜索结果的文本语料库（用于关键词匹配）
+    ddg_corpus = ""
+    for item in ddg_results[:10]:
+        ddg_corpus += item.get("title", "") + " "
+        ddg_corpus += item.get("snippet", "") + " "
+    ddg_corpus = ddg_corpus.lower()
+
+    unique_claims = []
+
+    for annotation in cocobook_annotations:
+        claim = annotation.get("claim", "")
+        if not claim:
+            continue
+
+        # 提取 claim 中的关键词（中文和英文单词）
+        # 简单策略：取 claim 中的关键实词，跳过常见的停用词
+        claim_lower = claim.lower()
+
+        # 停用词列表（常见的无意义词）
+        stopwords = {
+            "的", "了", "是", "在", "和", "与", "或", "但", "而", "就", "都", "也", "还",
+            "这", "那", "这个", "那个", "这些", "那些", "什么", "怎么", "如何", "为什么",
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+            "and", "or", "but", "if", "then", "than", "so", "such", "as", "at", "by", "for",
+            "from", "in", "into", "of", "on", "to", "with", "about", "into", "onto"
+        }
+
+        # 分词（简单的按空格和常见中文分词符号）
+        words = re.findall(r'[一-鿿]+|[a-zA-Z]+', claim_lower)
+        keywords = [w for w in words if len(w) > 1 and w not in stopwords]
+
+        if not keywords:
+            # 没有有效关键词，保守地认为不 unique
+            continue
+
+        # 检查关键词是否在 DDG 结果中出现
+        # 如果核心关键词（至少 2 个）都不在 DDG 中，认为 unique
+        matched_keywords = sum(1 for kw in keywords if kw in ddg_corpus)
+
+        # 判断标准：匹配的关键词少于 30%，认为是独特观点
+        if matched_keywords / len(keywords) < 0.3:
+            unique_claims.append(claim.strip())
+
+    return unique_claims[:10]  # 最多返回 10 条 unique claims
 
 
 def get_writing_samples(keyword: str, limit: int = 5) -> list[dict]:
@@ -808,3 +879,38 @@ def capture_screenshot(url: str, output_path: str,
         return True
     except requests.RequestException:
         return False
+
+
+def run_research(keyword: str, category: str = "guide") -> ResearchOutput:
+    """Run full research pipeline and return structured output with unique claims.
+
+    Args:
+        keyword: Search keyword
+        category: Article category (tutorial, guide, opinion, etc.)
+
+    Returns:
+        ResearchOutput with sources, note, and unique_claims
+    """
+    sources = gather_research(keyword, category)
+    research_note = build_research_note(keyword, sources)
+
+    # Extract unique_claims from cocobook annotations
+    cocobook_annotations = sources.get("annotations", [])
+    ddg_results = sources.get("web", [])
+
+    unique_claims = extract_unique_claims(cocobook_annotations, ddg_results)
+
+    return ResearchOutput(
+        keyword=keyword,
+        sources=sources,
+        research_note=research_note,
+        unique_claims=unique_claims
+    )
+
+
+if __name__ == "__main__":
+    # 测试 unique_claims 提取
+    result = run_research("WordPress 缓存插件")
+    print(f"Found {len(result.unique_claims)} unique claims:")
+    for claim in result.unique_claims:
+        print(f"  - {claim}")

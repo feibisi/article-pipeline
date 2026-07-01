@@ -22,6 +22,7 @@ from article_pipeline.review.ai_detection import (
     check_humanizer_quality,
 )
 from article_pipeline.review.geo import check_geo
+from article_pipeline.review.value_density import assess_value_density
 
 # ────────────────────────────────────────────────────────────────────
 # Existing checks (word count, format, facts, fabrication, semantic)
@@ -552,10 +553,110 @@ def generate_revision_suggestions(results: dict) -> list[dict]:
     return suggestions
 
 
+def compute_publish_gate(
+    value_density_result: dict,
+    has_differentiation: bool,
+    has_unique_claims: bool,
+) -> dict:
+    """聚合三个信号，输出发布决策。
+
+    Args:
+        value_density_result: assess_value_density() 返回的结果
+        has_differentiation: differentiation 是否非空且具体（>=20字）
+        has_unique_claims: unique_claims 是否非空（>=1条）
+
+    Returns:
+        {
+            "decision": "pass" | "needs_human" | "fail",
+            "reason": str,
+            "signals": {
+                "value_density": float,
+                "differentiation": bool,
+                "unique_claims": bool,
+            },
+            "blocking_reasons": list[str],
+        }
+    """
+    overall_score = value_density_result.get("overall_score", 0)
+    blocking_reasons = []
+
+    # 硬拦截：value_density < 4.0（slop）
+    if overall_score < 4.0:
+        signals = {
+            "value_density": overall_score,
+            "differentiation": has_differentiation,
+            "unique_claims": has_unique_claims,
+        }
+        return {
+            "decision": "fail",
+            "reason": f"内容密度不足（{overall_score}/10 < 4.0），疑似 slop，不可发布",
+            "signals": signals,
+            "blocking_reasons": [f"内容密度 {overall_score}/10 低于 4.0 门槛"],
+        }
+
+    # 发布必要条件检查
+    # 至少满足一条：value_density >= 6.0 或 differentiation 或 unique_claims
+    has_value_gate = overall_score >= 6.0
+    publish_conditions = {
+        "value_density": overall_score,  # 存储实际分数，而不是布尔值
+        "differentiation": has_differentiation,
+        "unique_claims": has_unique_claims,
+    }
+
+    satisfied = sum(publish_conditions.values())
+
+    # fail: value_density 4.0~6.0 但无任何发布必要条件
+    if overall_score < 6.0 and not has_differentiation and not has_unique_claims:
+        signals = {
+            "value_density": overall_score,
+            "differentiation": has_differentiation,
+            "unique_claims": has_unique_claims,
+        }
+        return {
+            "decision": "needs_human",
+            "reason": (
+                f"内容密度 {overall_score}/10 处于边界区，"
+                f"且无差异化说明和独到见解，需人工判断是否值得发布"
+            ),
+            "signals": signals,
+            "blocking_reasons": [
+                "内容密度低于 6.0 且无其他发布必要条件",
+                "缺乏差异化说明（differentiation 为空或不足20字）" if not has_differentiation else None,
+                "缺乏独到见解（unique_claims 为空）" if not has_unique_claims else None,
+            ],
+        }
+
+    # pass: 至少满足一条发布必要条件
+    satisfied_reasons = []
+    if has_value_gate:
+        satisfied_reasons.append(f"内容密度 {overall_score}/10 达标")
+    if has_differentiation:
+        satisfied_reasons.append("差异化说明具体（>=20字）")
+    if has_unique_claims:
+        satisfied_reasons.append("包含独到见解（>=1条unique claim）")
+
+    # 重新构建 signals 确保返回实际分数
+    signals = {
+        "value_density": overall_score,
+        "differentiation": has_differentiation,
+        "unique_claims": has_unique_claims,
+    }
+
+    return {
+        "decision": "pass",
+        "reason": f"发布条件满足：{'；'.join(satisfied_reasons)}",
+        "signals": signals,
+        "blocking_reasons": [],
+    }
+
+
 def run_self_review(article: str, tier: str = "A",
                     research_note: str = "",
                     trust_tier: str = "TIER_INTERNAL",
-                    category: str = "") -> dict:
+                    category: str = "",
+                    ddg_results: list[dict] | None = None,
+                    research_output: dict | None = None,
+                    differentiation: str = "") -> dict:
     """Run all self-review checks and return consolidated results."""
     ai_check = check_ai_patterns(article)
     word_check = check_word_count(article, tier)
@@ -567,6 +668,8 @@ def run_self_review(article: str, tier: str = "A",
     term_check = check_terminology(article)
     jargon_check = check_jargon(article)
     geo_check = check_geo(article, tier)
+    # Value density check (slop detection)
+    value_density = assess_value_density(article, research_output or {}, ddg_results or [])
     # Cross-reference fact check (TIER_EXTERNAL only)
     cross_ref = None
     if trust_tier == "TIER_EXTERNAL" and research_note:
@@ -601,6 +704,7 @@ def run_self_review(article: str, tier: str = "A",
         "terminology": term_check,
         "jargon": jargon_check,
         "geo": geo_check,
+        "value_density": value_density,
         "cross_reference": cross_ref,
         "overall_pass": all_pass,
     }
@@ -641,6 +745,16 @@ def run_self_review(article: str, tier: str = "A",
 
     results["overall_score"] = compute_overall_score(results)
     results["suggestions"] = generate_revision_suggestions(results) if not all_pass else []
+
+    # Publish gate: aggregate value_density + differentiation + unique_claims
+    has_differentiation = len(differentiation or "") >= 20
+    has_unique_claims = bool(research_output and research_output.get("unique_claims"))
+    publish_gate = compute_publish_gate(
+        value_density_result=value_density,
+        has_differentiation=has_differentiation,
+        has_unique_claims=has_unique_claims,
+    )
+    results["publish_gate"] = publish_gate
 
     return results
 # ────────────────────────────────────────────────────────────────────

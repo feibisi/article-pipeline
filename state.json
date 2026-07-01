@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "project": "article-pipeline",
+  "version": "0.4.0",
+  "lastUpdated": "2026-07-01T23:30:00+08:00",
+  "status": {
+    "phase": "overhaul",
+    "batch": "A_completed",
+    "next_batch": "B_pending"
+  },
+  "documentation": {
+    "SYSTEM-DEFINITION.md": "级联编译架构已更新(v0.4.0)",
+    "ROADMAP.md": "M0~M4分组完成, T-021 publish_gate已添加",
+    "STYLE-SYSTEM.md": "级联位置章节完整, 多LLM校准说明已添加",
+    "OVERHAUL-PLAN.md": "Studio契约标注为设计意图, 退出条件已添加",
+    "INDEX.md": "定位/粒度/读者三列完整",
+    "EVOLUTION-PLAN.md": "季度级时间表, D4发布必要条件已定义"
+  },
+  "batch_a": {
+    "status": "completed",
+    "date": "2026-07-01",
+    "changes": [
+      "SYSTEM-DEFINITION: 五层级联架构完整描述",
+      "ROADMAP: P0~P4 → M0~M4",
+      "STYLE-SYSTEM: 级联位置 + Layer 3/4区分",
+      "OVERHAUL-PLAN: 定位声明 + Studio设计意图标注",
+      "INDEX: 文档分工声明"
+    ],
+    "verification": "全部通过, 无内部矛盾"
+  },
+  "batch_b": {
+    "status": "pending",
+    "tasks": [
+      "genres/ 目录脚手架 (21品类 × 5文件契约)",
+      "contracts代码 (4个Output dataclass)",
+      "synthesis原型 (SynthesisOutput生成)"
+    ]
+  },
+  "thresholds": {
+    "value_density_hard_block": 4.0,
+    "value_density_recommend": 6.0,
+    "ai_check_threshold": 30
+  },
+  "next_steps": [
+    "启动Batch B: genres scaffold创建",
+    "实现4个Output dataclass",
+    "synthesis.py原型开发"
+  ]
+}

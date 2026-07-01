@@ -1,0 +1,15 @@
+domain: comparison
+name: 对比
+description: 帮助读者基于明确维度做出选择
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 对比
+- 比较
+- 区别
+- 差异
+- 选择
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: dimension_unified
+fallback_framework: step_by_step

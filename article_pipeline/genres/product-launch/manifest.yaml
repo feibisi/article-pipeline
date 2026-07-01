@@ -1,0 +1,14 @@
+domain: product-launch
+name: 发布
+description: 新产品功能发布通知
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 发布
+- 上线
+- 推出
+- 新
+trust_tier: INTERNAL
+injection_level: subtle
+preferred_framework: value_proposition
+fallback_framework: step_by_step

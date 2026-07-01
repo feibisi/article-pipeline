@@ -1,102 +1,92 @@
 # Article Pipeline — 系统定义
 
-> 版本: 0.3.0 | 更新: 2026-07-01 | 维护: elementary VM
+> 版本: 0.4.0 | 更新: 2026-07-01 | 维护: elementary VM
+> 本文件是本系统的 single source of truth——读这一份即可理解系统是什么、怎么工作。
 
 ## 这是什么
 
-Article Pipeline 是一套 AI 原生的中文技术内容生产系统。从关键词到 WordPress 发布，全链路自动化，人类只在关键决策点介入。
+Article Pipeline 是一套 AI 原生的中文内容编译系统。它不是"AI 写作工具"，是**编译器**——把知识（cocobook）+ 意图（选题）+ 人格（风格坐标）逐级编译为特定格式的高质量内容。
+
+从关键词到 WordPress 发布，全链路自动化，人类只在关键决策点介入。核心区别在于：不是"一步到位地生成文章"，而是"级联编译，每层有类型化输出、可检查、可回滚、有门控"。
 
 ## 设计哲学
 
-**AI 原生优先** — 不是"人写文章 + AI 辅助"，是"AI 写文章 + 人做质控"。系统设计围绕 LLM 的能力边界展开：在 LLM 擅长的地方（结构化写作、格式遵循、大量素材整合）放手让它做；在 LLM 不可靠的地方（事实准确性、编造倾向、风格微调）用规则和检查兜底。
+**AI 原生优先** — 系统围绕 LLM 的能力边界展开：在 LLM 擅长处（结构化写作、格式遵循、素材整合）放手让它做；在 LLM 不可靠处（事实准确、编造倾向、全局节奏）用结构化约束和门控兜底。
 
-**三层控制模型**:
+**五层级联编译** — 写作不是一次动作，是逐级细化的编译过程。在写之前，用结构化约束预先替模型做了它做不了的决定（选边、取舍、控制节奏）：
 
 ```
-事实层 (Trust Tier)     → 能不能写：信息来源边界
-风格层 (Style System)   → 怎么写：语气、节奏、立场强度
-质量层 (Review Module)  → 写得好不好：AI 检测、编造检查、术语规范
+SYNTHESIS  (理解)   research 碎片 → 核心判断 + 证据结构 + 矛盾 + 独特性
+FRAMEWORK  (方法论) synthesis + genre → 组织骨架 + 论证路径 + 段落职责
+STYLE      (风格)   5 维坐标 + genre 预设 → require/allow/avoid 结构化约束
+PROSODY    (语感)   style + 范本库 → few-shot 语感范本 + negative constraints
+COMPILE    (编译)   以上全部 + 精选素材 → 完整 writer prompt
 ```
 
-三层正交，互不干涉。Tier 不管你写得好不好看，Style 不管事实对不对，Review 事后评估所有维度。
+每层独立可测试、可替换、可跳过。层间传递类型化契约（dataclass），不是自由文本。
+
+**双轨约束** — 工程与创作的控制逻辑相反，系统两者都要：
+
+```
+工程层（硬约束）保底线 3→7  规则检查 + 自动拦截 + 可验证
+  例: AI 句式禁止 / synthesis 门控 / value_density<4 不发 / differentiation 不能空
+创作层（软约束）提上限 7→9  advisory 评分 + 范本引导 + 人工复核
+  例: 语感范本 / 审美概念激活 / framework 结构可打破 / 坐标 ±0.2 偏离不扣分
+```
+
+级联中前 3 层是工程（确定、可回滚），第 4 层是创作（范本引导、允许意外），第 5 层混合。
+
+**Trust Tier** — 事实层约束，作用于 research/synthesis 层（非顶层控制模型）。规定"能不能写"：信息来源边界。INTERNAL 可自由发挥，EXTERNAL 需事实-素材交叉验证。
 
 ## 核心假设
 
-1. **LLM 会编造** — 不是偶尔，是必然。所有事实必须有参考素材支撑，没有素材宁可留空。
-2. **LLM 能遵循结构指令** — 给定明确的段落骨架和写作规则，LLM 能按要求输出。
-3. **LLM 对风格微调不敏感** — 从"冷"到"暖"能感知到区别，但 +0.3 到 +0.6 的区别 LLM 基本无感。风格系统的精度为人类编辑服务，不为 LLM 服务。
-4. **审查可自动化** — 大部分质量问题可以用模式匹配 + 语义搜索发现，不需要人逐字审。
+1. **LLM 会编造** — 不是偶尔，是必然。所有事实必须有素材支撑，没有素材宁可留空。
+2. **LLM 分步做一件事 > 同时做四件事**（待验证假设）— writer 一次同时承担理解、分析、判断、表达四项负载时，会选最省力路径（串碎片、加连接词、通顺但空洞）。拆成级联后每层只做一件事，理应更好。这是级联架构的核心赌注，需 A/B 验证。
+3. **LLM 能遵循结构指令** — 给定明确骨架和 require/avoid 约束，LLM 能按要求输出。结构化约束远强于散文指令。
+4. **LLM 对风格微调不敏感** — 冷到暖能感知，+0.3 到 +0.6 基本无感。坐标精度为人类编辑服务。
+5. **审查可自动化** — 大部分质量问题可用模式匹配 + 语义搜索发现，硬约束自动拦截，软约束 advisory。
 
-## 系统边界
-
-**做什么**:
-- 技术教程、产品评测、行业观点、品牌营销、新闻通知等 21 种品类的中文文章
-- WordPress 平台发布（Gutenberg 区块格式）
-- 自动化研究、大纲、写作、审查、发布全流程
-
-**不做什么**:
-- 小说/剧本/诗歌等创意写作（需独立 workspace）
-- 视频脚本（归 studio VM 的 content-factory）
-- 翻译（归 translate VM 的 wptea 管线）
-- 实时新闻（无法验证时效性事实）
-
-## 技术栈
-
-| 组件 | 技术 | 说明 |
-|------|------|------|
-| 语言 | Python 3.11+ | 纯 Python，无框架依赖 |
-| LLM | GLM-5.1 via z.ai API | Anthropic-compatible endpoint，DeepSeek 备选 |
-| 知识库 | cocobook MCP (huawei-pc:8087) | 全文检索 + 语义搜索 |
-| 任务队列 | SQLite | 本地轻量，单 VM 运行 |
-| 发布 | WordPress REST API | Gutenberg 区块格式 |
-| 审查 UI | review_server.py (localhost:8765) | 内置 Web UI |
-
-## 模块关系
+## 核心架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Pipeline Orchestrator                     │
-├────────┬──────────┬──────────┬──────────────┬──────────────────┤
-│Research│  Outline │  Writer  │    Review    │    Publish        │
-│        │          │          │              │                   │
-│cocobook│ GLM-5.1  │ GLM-5.1  │ Pattern Match│ WP REST API       │
-│DDG web │ Ollama   │ (render_ │ Semantic     │ Gutenberg blocks  │
-│code    │ fallback │  style_  │ cocobook     │ translate bridge  │
-│VM peer │          │  block)  │ Humanizer-zh │                   │
-├────────┴──────────┴──────────┴──────────────┴──────────────────┤
-│ Config │ DB (SQLite) │ Style System │ Trust Tier │ Text Utils   │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│           article-pipeline（单体，级联编译引擎）                  │
+│                                                                │
+│  research → SYNTHESIS → FRAMEWORK → STYLE → PROSODY → COMPILE  │
+│    │           │门控        │门控      (配置)   (范本)     │      │
+│    │           ▼           ▼                             ▼      │
+│    │      素材不足/     方法论不       token 超限          │      │
+│    │      无判断→拦截   匹配→回退      →裁剪素材      write→review │
+│    │                                                    →publish │
+│  ┌─┴──────────────────────────────────────────────────────┐   │
+│  │  genres/（可插拔品类域，21 品类 × 5 文件契约）             │   │
+│  │  <genre>/ manifest.yaml framework.yaml style_preset.yaml │   │
+│  │           genre_rules.yaml prosody_samples/              │   │
+│  │  加新品类 = 放一个目录，不改 Python 代码                    │   │
+│  └──────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────┬─────────────────────────────┘
+                                    │ 接入点
+                           cocobook 知识库（MCP）
+                           synthesis 的理解基础（非搜索引擎）
+
+> creative-core 共享核心库（style/knowledge/llm/quality 抽离）= Phase 4+ 远期规划。
+> 当前系统是 article-pipeline 单体，尚未解耦。
+> Studio 视觉协作（visual_brief → 配图）= P4 设计意图，当前不实施。
 ```
 
 ## 数据流
 
 ```
-1. add(keyword, category, platform, priority)
-   → DB: status=queued
-
-2. research(task_id)
-   → cocobook 全文检索 + DDG 搜索 + 内容农场过滤 + AI 套话检测
-   → DB: status=researching → research_note saved
-
-3. outline(task_id)
-   → claim/audience/hook 生成 + 段落结构
-   → [TIER_EXTERNAL: human gate → status=outline_review → 等待人工确认]
-   → DB: status=outlining → outline saved
-
-4. write(task_id)
-   → Trust Tier 规则 + Style 指令 + Genre 规则 + 素材 → LLM 生成
-   → DB: status=writing → article saved
-
-5. review(task_id)
-   → 10 维评分 + overall_score + suggestions
-   → DB: status=reviewing → review results saved
-   → [score < 30/50: hard reject]
-
-6. (human review via review_server)
-   → approve → publish | request revision → rewrite → re-review
-
-7. publish(task_id)
-   → WordPress REST API → DB: status=done
+1. add(keyword, category, platform)              → status=queued
+2. research   cocobook 检索 + DDG + 内容农场过滤   → sources dict
+3. synthesis  多源对比 → 核心判断/矛盾/独特性       → SynthesisOutput
+              [门控: confidence<0.4 → "无差异化空间"，拦截不进入下层]
+4. framework  按 genre 选方法论 → 组织骨架          → FrameworkOutput
+              [门控: 方法论与素材不匹配 → 回退重选]
+5. style      5 维坐标 + genre 预设 → 结构化约束     → StyleOutput（纯配置，不调 LLM）
+6. prosody    坐标匹配范本 → few-shot + 负约束       → ProsodyOutput
+7. compile    组装全部 + 精选素材 → writer prompt   [门控: token 超限 → 裁剪素材]
+8. write      → article    9. review 10 维评分 + 硬门控    10. (人工复核) → publish
 ```
 
 ## 品类体系（21 种）
@@ -128,19 +118,32 @@ Article Pipeline 是一套 AI 原生的中文技术内容生产系统。从关�
 └─ 关注更新的人 → 告知型 (announcement / news)
 ```
 
+## 系统边界
+
+**做什么**: 21 种品类的中文文章；WordPress 发布（Gutenberg 区块）；research→synthesis→framework→style→prosody→compile→write→review→publish 全流程。
+
+**不做什么**: 小说/剧本/诗歌（需独立管线）；视频脚本（studio VM）；翻译（translate VM）；实时新闻（无法验证时效性事实）。
+
+**边界自知**（知道自己什么时候不行，不硬着头皮出垃圾）:
+- research 素材不足 → 标记"素材不足，需补充"，不强行写
+- synthesis 无法形成判断（来源全一致、无矛盾无独特性）→ 标记"选题无差异化空间"
+- writer 产出 ai_check < 4.0 → 不走 revise，标记"prompt 约束失效，回溯诊断"
+
 ## 质量标准
 
-### 硬门控（不通过则不发布）
+### 硬门控（工程层，不通过则不发布）
 
+- value_density < 4.0（独占信息比过低，三档规则：< 4.0 → fail/slop；4.0~6.0 → needs_human；>= 6.0 → pass）
 - Humanizer 总分 < 30/50
 - 编造检查 fabrication_flags > 2
-- "不是...而是..." 模板句超频（按文长动态计算阈值）
+- differentiation 字段为空
 - AI 检测模式分 < 门槛
 
-### 加权总分（满分 10）
+### 加权总分（满分 10，创作层部分为 advisory）
 
 | 维度 | 权重 | 检查内容 |
 |------|------|----------|
+| value_density | — | 独占信息比（硬门控，>20% 独占信息） |
 | humanizer | 0.27 | 5 维人味评分（直接性/节奏/信任度/真实性/精炼度） |
 | ai_check | 0.15 | 40+ AI 套话模式检测 |
 | fabrication | 0.15 | 伪造 URL/来源/数据 |
@@ -150,8 +153,18 @@ Article Pipeline 是一套 AI 原生的中文技术内容生产系统。从关�
 | word_count | 0.07 | 字数达标 |
 | jargon | 0.07 | 管理黑话/圈内术语检测 |
 
-### 信息性检查（不阻断发布）
+### 信息性检查（advisory，不阻断）
 
-- GEO（生成引擎优化）— Frase 5 维模型
-- 术语规范 — WordPress 中文术语表
-- 事实引用 — advisory 级别的来源追溯
+GEO 优化（Frase 5 维）、术语规范（WP 中文术语表）、事实引用追溯、语感合规（软约束）。
+
+## 技术栈
+
+| 组件 | 技术 | 说明 |
+|------|------|------|
+| 语言 | Python 3.11+ | 纯 Python，无框架依赖 |
+| LLM | GLM-5.1 (z.ai, 主力) + DeepSeek (备选) + Claude (备选) | 级联中不同层可用不同模型（synthesis 用便宜模型跑多次，write 用强模型） |
+| 知识库 | cocobook MCP (huawei-pc:8087) | 全文检索 + 语义搜索；synthesis 的理解基础 |
+| 品类域 | genres/ (yaml + txt) | 可插拔，5 文件契约，validate_genres.py 校验 |
+| 任务队列 | SQLite | 本地轻量，单 VM 运行 |
+| 发布 | WordPress REST API | Gutenberg 区块格式 |
+| 审查 UI | review_server.py (localhost:8765) | 内置 Web UI |

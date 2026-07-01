@@ -1,0 +1,16 @@
+domain: tutorial
+name: 教程
+description: 手把手教读者完成一个具体任务
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 教程
+- 如何
+- 怎么
+- 入门
+- 步骤
+- 操作指南
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: cognitive_scaffold
+fallback_framework: step_by_step

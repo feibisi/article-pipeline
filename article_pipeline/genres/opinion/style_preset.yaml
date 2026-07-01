@@ -1,0 +1,24 @@
+vector:
+  density: 0.1
+  warmth: 0.2
+  energy: 0.7
+  register: -0.1
+  edge: 0.9
+constraints:
+  purpose: 传递明确判断，引发思考或争论
+  require:
+  - 开头50字内亮出判断
+  - 结论有明确立场
+  - 指出对立观点的错误
+  allow: []
+  avoid:
+  - 铺垫背景
+  - 说各有优劣
+  - 立场模糊
+model_calibration:
+  glm:
+    edge: 0.1
+    energy: 0.1
+  claude:
+    warmth: -0.1
+    register: -0.1

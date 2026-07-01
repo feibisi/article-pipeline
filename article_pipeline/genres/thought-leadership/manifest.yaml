@@ -1,0 +1,14 @@
+domain: thought-leadership
+name: 思想
+description: 展示行业前瞻性判断
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 思考
+- 洞察
+- 前瞻
+- 未来
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: counter_intuitive
+fallback_framework: step_by_step

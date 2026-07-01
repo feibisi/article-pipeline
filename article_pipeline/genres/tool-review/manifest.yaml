@@ -1,0 +1,14 @@
+domain: tool-review
+name: 评测
+description: 基于实测的工具评价
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 评测
+- 测试
+- 评价
+- 体验
+trust_tier: INTERNAL
+injection_level: subtle
+preferred_framework: evidence_based
+fallback_framework: step_by_step

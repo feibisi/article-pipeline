@@ -1,0 +1,14 @@
+domain: case-study
+name: 案例
+description: 通过具体案例传递可复用经验
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 案例
+- 实践
+- 项目
+- 经验
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: narrative_arc
+fallback_framework: step_by_step

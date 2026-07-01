@@ -84,7 +84,52 @@
 | wp-tech | +0.3 | +0.3 | +0.2 | -0.2 | +0.3 | full |
 | book-knowledge | +0.0 | +0.6 | -0.1 | +0.1 | +0.2 | full |
 
+## 在级联编译中的位置
+
+管线正从"单步注入 writer prompt"改造为五层级联编译。风格系统占据其中两层：
+
+- **Layer 3 STYLE（工程层）** — 纯配置，不调 LLM。输入 5 维坐标 + genre preset，输出 `StyleOutput`：结构化约束（require/allow/avoid）+ 渲染后的文本指令。确定性映射，可回滚、可检查。
+- **Layer 4 PROSODY（创作层）** — 范本驱动。输入 `StyleOutput` + genre `prosody_samples/`，输出 `ProsodyOutput`：few-shot 范本 + negative constraints + rhythm_hint。允许偏离，不做强制检查。
+
+两层的分工是本质区别：
+
+| | STYLE (L3) | PROSODY (L4) |
+|---|---|---|
+| 定义 | 作者是谁（人格） | 读起来什么感觉（语感） |
+| 手段 | 结构化约束编译 | 范本引导 |
+| 验证 | 机器可验证（require/avoid 检查） | 只能范本引导，不可机器判定 |
+| 性质 | 工程（确定性） | 创作（允许意外） |
+
+5 维坐标定义"温暖、果断、节奏快"这样的人格；但同一组坐标可以写出有语感和翻译腔两种文本。语感是句子节奏、段落呼吸、句间承接的物理层，坐标管不到，只能靠 PROSODY 层的范本引导。
+
+## 结构化约束输出
+
+`render_style_block()` 的输出正在从散文指令升级为结构化约束：
+
+- **当前**：输出散文指令（"请写得更有温度"），塞进 writer prompt 由 LLM 自由解读，结果不可控。
+- **目标**：同时输出两样东西——`{purpose, require, allow, avoid}` 结构化约束（机器可检查）+ 渲染后的文本指令（给 LLM 参考，辅助手段）。
+
+每个维度重新定义编译规则（例：`edge(+)` → require: 判断句前置；avoid: "各有优劣"类 hedge 结论；可量化检查：判断句位置 + 确定性词密度）。Review 从"事后打分"变为"检查产出是否满足 require 并避开了 avoid"。
+
+> 状态：设计已定，实现待 Phase 1-2。结构化约束模板已在 `style_preset.yaml` 的 `constraints` 段定义。
+
+## 多 LLM 校准
+
+不同模型对同一坐标值反应不同：GLM 默认偏保守（需要补一点 edge/energy），Claude 默认偏亲切口语（需要收一点 warmth/register）。同样的 `edge:+0.5`，两个模型写出的确定性强度不一样。
+
+`style_preset.yaml` 已预留 `model_calibration` 字段，为每个模型定义坐标 offset：
+
+```yaml
+model_calibration:
+  glm: {edge: +0.1, energy: +0.1}
+  claude: {warmth: -0.1, register: -0.1}
+```
+
+> 状态：字段已预留，offset 值未实施。等 T-006 `check_style_compliance()` 上线后，用量化的风格遵循度数据测出各模型的实际偏差，再确定 offset 值，避免拍脑袋。
+
 ## 与 Writer Prompt 的集成
+
+> 以下描述为当前实现（单步注入，旧模式）。改造后 Layer 3+4 的级联输出会喂入 Layer 5 COMPILE，本节将更新。
 
 `render_style_block(category, overrides)` 生成完整风格指令块，在 writer.py 中注入到 LLM prompt：
 
@@ -155,6 +200,7 @@ from article_pipeline.style import (
 ## 已知局限与改进方向
 
 1. **LLM 对连续值不敏感** — +0.3 和 +0.5 的区别在 LLM 输出中几乎不可观测。坐标精度的真正价值是给人类编辑提供可调参界面。
-2. **审美概念未按品类筛选** — 全部 5 条一次性注入，某些概念与特定品类的 genre_rules 冲突（如 beginner 需要详细解释，而"留白"要求不解释）。
+2. **审美概念未按品类筛选** — 全部 5 条一次性注入，某些概念与特定品类的 genre_rules 冲突（如 beginner 需要详细解释，而"留白"要求不解释）。已有解决方案：`_AESTHETIC_AFFINITY` 映射表，每个品类只注入适合的审美子集（见 ROADMAP T-003），待实施。
 3. **缺少风格遵循度评分** — 系统能告诉你"目标是 warmth=+0.6"，但无法评估文章实际达到了什么 warmth 水平。
 4. **subtle 级别维度选取** — 设计意图取 density + edge，当前实现取前 2 条（density + warmth）。
+5. **creative-core 解耦为远期目标** — 风格系统本质是跨格式的通用创作人格层，长期规划抽取为独立的 creative-core 共享库（Phase 4+）。当前风格系统代码留在 `article_pipeline/style.py` 内部，不做提前解耦。

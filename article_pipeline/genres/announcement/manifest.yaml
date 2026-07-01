@@ -1,0 +1,13 @@
+domain: announcement
+name: 公告
+description: 清晰传达事务变更
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 公告
+- 通知
+- 变更
+trust_tier: INTERNAL
+injection_level: none
+preferred_framework: fact_first
+fallback_framework: step_by_step

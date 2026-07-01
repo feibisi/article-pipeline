@@ -5,6 +5,9 @@ import requests
 import yaml
 import os
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 
 OUTLINE_PROMPT = """你是一位有观点、有立场的资深技术编辑。你的任务不是生成"关于X的介绍"，而是先想清楚你对这个话题的判断是什么，然后围绕这个判断搭建结构。
@@ -140,7 +143,8 @@ Block/块 → 必须用"区块"（不是"块"）。Block Editor → 区块编辑
     "primary_keyword": "...",
     "secondary_keywords": ["...", "..."],
     "meta_description": "..."
-  }}
+  }},
+  "differentiation": "必填。一句话描述'这篇文章比搜索第一页的结果多给读者什么'。必须包含具体信息（书名/数据/场景/反效果/无人提及），不能是泛泛而谈。示例：'基于 cocobook 3 本书的交叉对比，搜索结果都只引用了官方文档'；'包含 elementary 实测的性能数据，搜索结果都是理论描述'。少于20字或缺乏具体信息会被拒绝。"
 }}
 
 分类说明:
@@ -234,6 +238,35 @@ def _try_api(prompt: str) -> dict:
     return last_error or {"error": "all_endpoints_failed"}
 
 
+def _validate_differentiation(outline: dict) -> None:
+    """检查 differentiation 是否足够具体。不够则警告或抛出错误。"""
+    differentiation = outline.get("differentiation", "")
+
+    # 检查是否为空
+    if not differentiation or not differentiation.strip():
+        raise ValueError(f"differentiation 字段为空或缺失")
+
+    differentiation = differentiation.strip()
+
+    # 检查长度（少于 20 字拒绝）
+    if len(differentiation) < 20:
+        raise ValueError(f"differentiation 不够具体（少于20字）: {differentiation}")
+
+    # 检查是否包含具体信息元素
+    specificity_keywords = ["实测", "数据", "本书", "交叉", "对比", "场景",
+                            "反效果", "无人", "官方", "书名", "案例", "实验",
+                            "源码", "内部", "独家", "第一手", "原创"]
+    if not any(kw in differentiation for kw in specificity_keywords):
+        logger.warning(f"differentiation 缺乏具体信息元素: {differentiation}")
+
+    # 检查是否是空洞词汇
+    empty_phrases = ["详细介绍", "深入分析", "全面解析", "全面介绍",
+                     "详细说明", "深度解读", " comprehensive "]
+    for phrase in empty_phrases:
+        if phrase in differentiation.lower():
+            raise ValueError(f"differentiation 包含空洞词汇: {differentiation}")
+
+
 def generate_outline(keyword: str, category: str, platform: str,
                      research_note: str) -> dict:
     """Generate an article outline. Tries Ollama first, falls back to API."""
@@ -258,6 +291,8 @@ def generate_outline(keyword: str, category: str, platform: str,
     # Try DeepSeek API first (ANTHROPIC_AUTH_TOKEN configures Anthropic-compatible endpoint)
     result = _try_api(prompt)
     if "error" not in result:
+        # 验证 differentiation 字段
+        _validate_differentiation(result)
         return result
 
     # Fallback: Ollama
@@ -266,7 +301,11 @@ def generate_outline(keyword: str, category: str, platform: str,
     model = ollama.get("outline_model", "gemma3:12b")
 
     try:
-        return _try_ollama(prompt, ollama_url, model)
+        result = _try_ollama(prompt, ollama_url, model)
+        # 验证 differentiation 字段
+        if "error" not in result:
+            _validate_differentiation(result)
+        return result
     except (requests.ConnectionError, requests.Timeout, requests.RequestException, json.JSONDecodeError):
         pass
 
@@ -287,6 +326,13 @@ def format_outline_for_review(outline: dict) -> str:
 
     lines.append(f"\n### 核心论点\n{outline.get('core_argument', 'N/A')}")
 
+    # 差异化价值
+    differentiation = outline.get('differentiation', '')
+    if differentiation:
+        lines.append(f"\n### 差异化价值\n{differentiation}")
+    else:
+        lines.append("\n### 差异化价值\n*（缺失）*")
+
     lines.append("\n### 段落结构")
     for i, sec in enumerate(outline.get("sections", [])):
         lines.append(f"\n**{i+1}. {sec.get('heading', '')}**")
@@ -305,3 +351,47 @@ def format_outline_for_review(outline: dict) -> str:
     lines.append(f"- 内链机会: {', '.join(seo.get('internal_link_opportunities', []))}")
 
     return "\n".join(lines)
+
+
+def test_differentiation_validation():
+    """测试 differentiation 门控逻辑。"""
+    import pytest
+
+    # 合法案例（应该通过）
+    valid_cases = [
+        "基于 cocobook 3 本书的交叉对比，搜索结果都只引用了官方文档",
+        "包含 elementary 实测的性能数据，搜索结果都是理论描述",
+        "指出了官方推荐做法在特定场景下的反效果，无人提及",
+        "通过源码分析发现了内部实现的 Bug，公开文档未记载",
+    ]
+
+    # 非法案例（应该抛出 ValueError）
+    invalid_cases = [
+        "",  # 空字符串
+        "   ",  # 只有空白
+        "本文提供了详细的介绍",  # 太泛
+        "深入分析",  # 太短
+        "a" * 19,  # 少于 20 字
+    ]
+
+    for case in valid_cases:
+        try:
+            _validate_differentiation({"differentiation": case})
+            print(f"PASS: {case[:50]}...")
+        except ValueError as e:
+            print(f"FAIL (should pass): {case[:50]}... -> {e}")
+            raise
+
+    for case in invalid_cases:
+        try:
+            _validate_differentiation({"differentiation": case})
+            print(f"FAIL (should raise): {case[:50]}...")
+            raise AssertionError(f"Case should raise ValueError: {case}")
+        except ValueError:
+            print(f"PASS (raised): {case[:50]}...")
+
+    print("\nAll differentiation validation tests passed!")
+
+
+if __name__ == "__main__":
+    test_differentiation_validation()

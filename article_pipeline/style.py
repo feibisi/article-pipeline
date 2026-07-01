@@ -92,7 +92,7 @@ _PRESETS: dict[str, dict] = {
     "comparison":          {"density":  0.4, "warmth":  0.0, "energy":  0.2, "register": -0.3, "edge":  0.5, "injection": Injection.FULL},
     "guide":               {"density":  0.3, "warmth":  0.4, "energy":  0.1, "register": -0.3, "edge":  0.4, "injection": Injection.FULL},
     "troubleshooting":     {"density":  0.2, "warmth":  0.1, "energy":  0.3, "register": -0.2, "edge":  0.7, "injection": Injection.FULL},
-    "beginner":            {"density": -0.4, "warmth":  0.8, "energy": -0.2, "register":  0.2, "edge": -0.1, "injection": Injection.FULL},
+    "beginner":            {"density":  0.0, "warmth":  0.8, "energy": -0.2, "register":  0.2, "edge": -0.1, "injection": Injection.FULL},
     "case-study":          {"density":  0.0, "warmth":  0.6, "energy":  0.3, "register":  0.1, "edge":  0.5, "injection": Injection.FULL},
     "listicle":            {"density": -0.2, "warmth":  0.5, "energy":  0.3, "register": -0.1, "edge":  0.4, "injection": Injection.FULL},
     "trend":               {"density":  0.3, "warmth":  0.0, "energy":  0.4, "register": -0.4, "edge":  0.6, "injection": Injection.FULL},
@@ -101,8 +101,8 @@ _PRESETS: dict[str, dict] = {
     "resource-roundup":    {"density":  0.2, "warmth":  0.4, "energy":  0.1, "register": -0.2, "edge":  0.3, "injection": Injection.SUBTLE},
     "tool-review":         {"density":  0.1, "warmth": -0.1, "energy":  0.2, "register": -0.3, "edge":  0.5, "injection": Injection.SUBTLE},
     "product-launch":      {"density": -0.2, "warmth":  0.4, "energy":  0.4, "register": -0.1, "edge":  0.6, "injection": Injection.SUBTLE},
-    "brand-marketing":     {"density":  0.1, "warmth":  0.5, "energy":  0.5, "register":  0.0, "edge":  0.6, "injection": Injection.SUBTLE},
-    "soft-article":        {"density":  0.0, "warmth":  0.5, "energy":  0.2, "register": -0.1, "edge":  0.3, "injection": Injection.SUBTLE},
+    "brand-marketing":     {"density":  0.1, "warmth":  0.5, "energy":  0.5, "register":  0.0, "edge":  0.3, "injection": Injection.SUBTLE},
+    "soft-article":        {"density":  0.3, "warmth":  0.2, "energy":  0.2, "register": -0.1, "edge":  0.3, "injection": Injection.SUBTLE},
     "marketing":           {"density": -0.1, "warmth":  0.4, "energy":  0.5, "register":  0.0, "edge":  0.5, "injection": Injection.SUBTLE},
     "announcement":        {"density": -0.5, "warmth": -0.3, "energy":  0.0, "register": -0.5, "edge":  0.4, "injection": Injection.NONE},
     "news":                {"density": -0.4, "warmth": -0.4, "energy":  0.1, "register": -0.5, "edge":  0.3, "injection": Injection.NONE},
@@ -193,14 +193,35 @@ _AESTHETIC_CONCEPTS: list[dict[str, str]] = [
 
 
 def render_aesthetic_concepts(vector: StyleVector | None = None,
-                               concepts: list[str] | None = None) -> str:
+                               concepts: list[str] | None = None,
+                               category: str | None = None) -> str:
     if vector and vector.injection == Injection.NONE:
         return ""
     if vector and vector.injection == Injection.SUBTLE:
         return ""
+
+    # 品类 → 审美概念映射（T-003）
+    _CATEGORY_CONCEPTS: dict[str, list[str]] = {
+        "beginner": ["分寸"],
+        "tutorial": ["文气", "分寸"],
+        "opinion": ["风骨", "文气", "意在言外"],
+        "editorial": ["风骨", "文气", "意在言外"],
+        "comparison": ["分寸", "文气"],
+        "troubleshooting": ["分寸", "风骨"],
+        "case-study": ["文气", "意在言外"],
+    }
+
     selected = _AESTHETIC_CONCEPTS
+
+    # 优先级：显式指定 > 品类映射 > 全部
     if concepts:
         selected = [c for c in selected if c["name"] in concepts]
+    elif category:
+        cat_key = category.lower().strip()
+        mapped = _CATEGORY_CONCEPTS.get(cat_key)
+        if mapped:
+            selected = [c for c in selected if c["name"] in mapped]
+
     lines = ["## 写作审美（来自中文写作经典，内化为你的本能）"]
     for c in selected:
         lines.append(f"- {c['instruction']}")
@@ -233,7 +254,7 @@ def render_style_block(category: str, overrides: dict | None = None) -> str:
     injection_block = render_injection(vector)
     if injection_block:
         parts.append(injection_block)
-    aesthetic_block = render_aesthetic_concepts(vector)
+    aesthetic_block = render_aesthetic_concepts(vector, category=category)
     if aesthetic_block:
         parts.append(aesthetic_block)
     return "\n\n".join(parts) if parts else ""

@@ -18,13 +18,15 @@
 
 ## 规划与决策（方向性文档）
 
-| 文档 | 用途 | 读者 |
-|------|------|------|
-| [OVERHAUL-PLAN.md](OVERHAUL-PLAN.md) | 完整改造执行方案：级联编译、可插拔品类域、实施表、验收标准、Studio 协作契约 | 执行者/决策者 |
-| [EVOLUTION-PLAN.md](EVOLUTION-PLAN.md) | A/B/C/D 四条发展路径、反 slop 策略、架构备忘 | 决策者 |
-| [ROADMAP.md](ROADMAP.md) | 近期执行任务清单（P0~P4）、依赖关系、验收标准 | 执行者 |
-| [AUDIT-RESULTS-AND-NEXT.md](AUDIT-RESULTS-AND-NEXT.md) | 2026-07-01 文档审查结果、14 项修复清单、子代理任务拆分、新会话启动说明 | 执行者 |
-| [STYLE-AUDIT.md](STYLE-AUDIT.md) | 风格系统审计：已知问题、改进建议 | 开发 |
+| 文档 | 定位 | 粒度 | 读者 |
+|------|------|------|------|
+| [OVERHAUL-PLAN.md](OVERHAUL-PLAN.md) | 架构设计方案：级联编译、可插拔品类域、类型化契约、Studio 协作设计意图、验收标准 | Phase 级 | 架构决策者 |
+| [EVOLUTION-PLAN.md](EVOLUTION-PLAN.md) | 发展方向：A/B/C/D 四条路径、反 slop 策略、领域扩展 | 季度级 | 方向决策者 |
+| [ROADMAP.md](ROADMAP.md) | 执行任务清单：M0~M4 任务、依赖关系、验证方法 | Task 级 | 执行者 |
+| [AUDIT-RESULTS-AND-NEXT.md](AUDIT-RESULTS-AND-NEXT.md) | 2026-07-01 文档审查结果、修复清单、子代理任务拆分 | 一次性 | 执行者 |
+| [STYLE-AUDIT.md](STYLE-AUDIT.md) | 风格系统审计：已知问题、改进建议 | 一次性 | 开发 |
+
+三份规划文档分工：OVERHAUL = 怎么建（架构），EVOLUTION = 往哪走（方向），ROADMAP = 今天做什么（任务）。不重复，不交叉。
 
 ## 外部设计文档（不在本目录）
 

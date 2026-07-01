@@ -1,0 +1,14 @@
+domain: wp-tech
+name: WP技术
+description: WordPress 技术深度内容
+version: 1.0.0
+status: validated
+trigger_keywords:
+- WordPress
+- WP
+- 插件
+- 主题
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: technical_deep_dive
+fallback_framework: step_by_step

@@ -1,0 +1,14 @@
+domain: beginner
+name: 入门
+description: 零基础读者快速上手
+version: 1.0.0
+status: validated
+trigger_keywords:
+- 入门
+- 新手
+- 快速
+- 上手
+trust_tier: INTERNAL
+injection_level: full
+preferred_framework: step_by_step
+fallback_framework: step_by_step
