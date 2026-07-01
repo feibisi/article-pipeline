@@ -3,7 +3,16 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-__all__ = ["SynthesisOutput", "FrameworkOutput", "StyleOutput", "ProsodyOutput"]
+__all__ = [
+    "SynthesisOutput",
+    "FrameworkOutput",
+    "StyleOutput",
+    "ProsodyOutput",
+    "CompileOutput",
+    "HeroBrief",
+    "VisualAnchor",
+    "SeoMetadata",
+]
 
 
 @dataclass
@@ -63,3 +72,46 @@ class ProsodyOutput:
     negative_constraints: str  # 硬性禁止列表
     rhythm_hint: str  # 一句话节奏提示（e.g. "短句密集推进，长句仅在总结时出现"）
     freeform_note: str = ""  # 字段装不下但重要的微妙信息（语气转折、潜台词、节奏呼吸感）
+
+
+@dataclass
+class HeroBrief:
+    """封面图需求描述（T-016 结构化输出）"""
+    concept: str  # 意象描述（如 "服务器机房，冷色调，绿色数据流"）
+    mood: str  # 情绪基调（如 "专业、冷静、可靠"）
+    dimensions: str  # 尺寸建议（如 "16:9" 或 "1200x630"）
+    keywords: list[str] = field(default_factory=list)  # 关键词辅助生成
+
+
+@dataclass
+class VisualAnchor:
+    """视觉锚点（T-016 结构化输出）"""
+    section_role: str  # 对应哪个结构部分（如 "opening"）
+    concept: str  # 意象描述
+    visual_type: Literal["screenshot", "diagram", "photo", "illustration", "none"]
+    screenshot_target: str | None = None  # 如果是截图，目标 URL
+    diagram_spec: str | None = None  # 如果是图表，规格描述
+
+
+@dataclass
+class SeoMetadata:
+    """SEO 元数据（T-016 结构化输出）"""
+    title: str  # 文章标题
+    description: str  # 搜索结果描述
+    keywords: list[str]  # 关键词列表
+    excerpt: str  # 文章摘要（前 150 字）
+
+
+@dataclass
+class CompileOutput:
+    """Layer 5 编译层完整输出（T-016 结构化输出）
+
+    markdown 是独立完整的产物（纯文本可发布）。
+    json 元数据是增强层，供下游工具（Studio、发布系统）使用。
+    """
+    markdown: str  # 完整的 writer prompt（可喂给 LLM 生成正文）
+    hero_brief: HeroBrief | None = None  # 封面图需求
+    visual_anchors: list[VisualAnchor] = field(default_factory=list)  # 视觉锚点列表
+    seo_metadata: SeoMetadata | None = None  # SEO 元数据
+    tags: list[str] = field(default_factory=list)  # 文章标签
+    cta: list[str] = field(default_factory=list)  # 下一步行动建议

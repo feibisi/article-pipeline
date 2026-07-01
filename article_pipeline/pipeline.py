@@ -391,15 +391,42 @@ class Pipeline:
         }
 
         # Compile final prompt
-        prompt = run_compile(framework, style, prosody, material, task["keyword"], task["category"])
+        compile_output = run_compile(framework, style, prosody, material, task["keyword"], task["category"])
 
-        # Save compiled prompt
-        self.db.save_stage_output(task_id, "compiled_prompt", prompt)
+        # Save compiled prompt (markdown)
+        self.db.save_stage_output(task_id, "compiled_prompt", compile_output.markdown)
+
+        # Save structured metadata (JSON)
+        compile_metadata = json.dumps({
+            "hero_brief": {
+                "concept": compile_output.hero_brief.concept if compile_output.hero_brief else None,
+                "mood": compile_output.hero_brief.mood if compile_output.hero_brief else None,
+                "dimensions": compile_output.hero_brief.dimensions if compile_output.hero_brief else None,
+            } if compile_output.hero_brief else None,
+            "visual_anchors": [
+                {
+                    "section_role": v.section_role,
+                    "concept": v.concept,
+                    "visual_type": v.visual_type,
+                    "screenshot_target": v.screenshot_target,
+                }
+                for v in compile_output.visual_anchors
+            ],
+            "seo_metadata": {
+                "title": compile_output.seo_metadata.title if compile_output.seo_metadata else None,
+                "description": compile_output.seo_metadata.description if compile_output.seo_metadata else None,
+                "excerpt": compile_output.seo_metadata.excerpt if compile_output.seo_metadata else None,
+            } if compile_output.seo_metadata else None,
+            "tags": compile_output.tags,
+            "cta": compile_output.cta,
+        }, ensure_ascii=False)
+        self.db.save_meta(task_id, {"compile_metadata": compile_metadata})
 
         self.db.update_status(task_id, "outlining")
-        print(f"  [compile] Done — prompt length: {len(prompt)} chars")
+        print(f"  [compile] Done — prompt length: {len(compile_output.markdown)} chars, "
+              f"{len(compile_output.visual_anchors)} visual anchors")
 
-        return {"task_id": task_id, "stage": "compile", "prompt_length": len(prompt)}
+        return {"task_id": task_id, "stage": "compile", "prompt_length": len(compile_output.markdown)}
 
     def process_outline(self, task_id: int) -> dict | None:
         """Stage 3: Generate outline from research."""
