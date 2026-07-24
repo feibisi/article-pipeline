@@ -20,22 +20,29 @@ SYNTHESIS_PROMPT = """你是一位深度阅读分析师。任务：从以下素�
 
 # 你的任务
 1. **core_judgment**（一句话）: 这组素材共同指向什么理解？如果有矛盾，指出矛盾的实质。
-2. **evidence_for**: 支持判断的证据（来源 + claim + 强度 0-1）
-3. **evidence_against**: 反对或质疑的证据
+2. **evidence_for**: 支持判断的证据。每条的 claim 必须是素材原文的忠实压缩，source 必须抄素材里出现的来源名（书名 / 文章标题 / 机构名）。
+3. **evidence_against**: 反对或质疑的证据，格式同上。
 4. **conflicts**: 指出素材间的矛盾（来源A vs 来源B，各自主张，如何化解）
 5. **unique_claims**: 哪些主张在主流搜索结果中找不到？（需标注）
 6. **differentiation**: 比搜索第一页的结果，这组素材多给读者什么？
 7. **confidence**: 0-1，你对判断的信心
+8. **freeform_note**: 字段装不下但重要的信息（语气、潜台词、素材的可信度问题）。没有就给空字符串。
+
+# 硬性约束
+- 不要引入素材里没有的事实。claim 里的数字、版本号、日期、价格必须能在素材里逐字找到。
+- 无法确定来源的观察不要放进 evidence_for，放进 freeform_note 并说明来源不明。
+- source 字段禁止写"综合多方""业内共识""网络资料"这类无主来源。
 
 # 输出格式（JSON，不要有其他内容）
 {{
   "core_judgment": "...",
-  "evidence_for": [...],
-  "evidence_against": [...],
-  "conflicts": [...],
-  "unique_claims": [...],
+  "evidence_for": [{{"source": "...", "claim": "...", "strength": 0.8}}],
+  "evidence_against": [{{"source": "...", "claim": "...", "strength": 0.5}}],
+  "conflicts": [{{"source_a": "...", "source_b": "...", "claim_a": "...", "claim_b": "...", "resolution": "..."}}],
+  "unique_claims": ["..."],
   "differentiation": "...",
-  "confidence": 0.7
+  "confidence": 0.7,
+  "freeform_note": ""
 }}
 """
 
@@ -152,6 +159,7 @@ def run_synthesis(
     sources: dict,
     model: str = DEFAULT_MODEL,
     fallback_model: str = FALLBACK_MODEL,
+    keyword: str = "",
 ) -> SynthesisOutput:
     """运行 synthesis 层，从素材中提取结构化理解。
 
@@ -159,14 +167,14 @@ def run_synthesis(
         sources: research 模块的输出（cocobook + DDG + 抓取内容）
         model: 主模型（当前未使用，使用 llm.py 的默认 fallback 链）
         fallback_model: 备选模型（同上）
+        keyword: 文章主题。_call_synthesis_llm 一直支持这个参数，但
+            run_synthesis 从不传，等于让整条级联的根节点在不知道文章
+            主题的情况下总结素材。
 
     Returns:
         SynthesisOutput: 结构化理解
-
-    Raises:
-        ValueError: confidence < 0.4 时抛出（素材不足，无法形成判断）
     """
-    result = _call_synthesis_llm(sources)
+    result = _call_synthesis_llm(sources, keyword=keyword)
 
     # LLM 调用失败 → 降级返回基础结构
     if "error" in result:
@@ -204,6 +212,7 @@ def run_synthesis(
         unique_claims=result.get("unique_claims", []),
         differentiation=result.get("differentiation", ""),
         confidence=confidence,
+        freeform_note=result.get("freeform_note", "") or "",
     )
 
 

@@ -94,28 +94,7 @@ class TestExtractSocialCardSpec:
         assert len(spec.description) <= 100
 
 
-class TestSocialCardSpec:
-    def test_spec_creation(self):
-        spec = SocialCardSpec(
-            title="Test Title",
-            description="Test Description",
-            dimensions="800x600",
-            output_path="/test/output.png",
-        )
 
-        assert spec.title == "Test Title"
-        assert spec.description == "Test Description"
-        assert spec.dimensions == "800x600"
-        assert spec.output_path == "/test/output.png"
-        assert spec.template == "default"
-
-    def test_spec_with_custom_template(self):
-        spec = SocialCardSpec(
-            title="Test",
-            description="Test",
-            dimensions="800x600",
-            output_path="/test/output.png",
-            template="custom",
-        )
-
-        assert spec.template == "custom"
+# REMOVED: dataclass constructor-echo tests. They instantiated a dataclass
+# and asserted back the literals just passed in — the "code under test" was
+# the literal in the test body. Zero defect-detection power.

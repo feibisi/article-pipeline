@@ -1,8 +1,18 @@
-"""Compile layer — assemble all layer outputs into final writer prompt.
+"""Compile layer — structured article metadata derived from the cascade.
 
-This is Layer 5 of the cascade: it takes outputs from Synthesis, Framework, Style,
-and Prosody layers, combines with validated material, and produces the final prompt
-for the writer LLM.
+This is Layer 5 of the cascade. Its live product is ``CompileOutput``'s
+*structured metadata* (hero_brief / visual_anchors / seo_metadata / tags / cta),
+which the pipeline persists via ``db.save_meta`` and downstream tools consume.
+
+IMPORTANT — ``CompileOutput.markdown`` is NOT the writer's input.
+``writer.write_article`` builds its own prompt (WP glossary, trust tiers,
+[已确认]/[需确认] fact grading, genre rules, aesthetic concepts, the five-axis
+style block, the anti-fabrication block, full prosody samples). The markdown
+assembled here carries none of that and truncates prosody samples to 100
+characters, so routing it into the writer would strip every factual guardrail.
+The one thing it uniquely had — source-attributed evidence — now lives in the
+writer as ``_render_sourced_material``. Keep ``markdown`` as a human-readable
+debug rendering of the cascade; do not wire it into generation.
 
 T-016: Extended to output structured JSON metadata alongside markdown.
 """

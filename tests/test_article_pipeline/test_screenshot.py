@@ -94,23 +94,7 @@ class TestExtractScreenshotTargets:
         assert urls == []
 
 
-class TestScreenshotAsset:
-    def test_asset_creation(self):
-        asset = ScreenshotAsset(
-            url="https://example.com",
-            path="/assets/test.png",
-            visual_type="step",
-        )
-        assert asset.url == "https://example.com"
-        assert asset.path == "/assets/test.png"
-        assert asset.visual_type == "step"
-        assert asset.optimized is False
 
-    def test_asset_optimized_flag(self):
-        asset = ScreenshotAsset(
-            url="https://example.com",
-            path="/assets/test.webp",
-            visual_type="hero",
-            optimized=True,
-        )
-        assert asset.optimized is True
+# REMOVED: dataclass constructor-echo tests. They instantiated a dataclass
+# and asserted back the literals just passed in — the "code under test" was
+# the literal in the test body. Zero defect-detection power.

@@ -117,72 +117,63 @@ def test_format_sources():
     print("✅ 完整素材格式化")
 
 
-def test_synthesis_output_structure():
-    """测试 synthesis 输出结构（无 API 调用）"""
-    print("\n=== 测试 SynthesisOutput 结构 ===\n")
+# REMOVED test_synthesis_output_structure: it constructed a SynthesisOutput and
+# asserted back the literals it had just passed in. No production code ran.
+#
+# REMOVED test_synthesis_with_mock: despite the name it mocked nothing. It called
+# the real run_synthesis and asserted confidence == 0.0 — satisfied by *any*
+# failure (no API key, network down, malformed JSON), and on a machine with
+# AP_DS_API_KEY set it made a live billable call. Replaced below with a version
+# that actually injects a fake LLM.
+#
+# REMOVED test_quality_gate: asserted only `0 <= MIN_CONFIDENCE <= 1`, i.e. that
+# a constant is a probability. Its own docstring admitted it tested nothing.
 
-    # 创建一个 mock 输出验证结构
-    output = SynthesisOutput(
-        core_judgment="这是一句话判断",
-        evidence_for=[{"source": "书A", "claim": "观点1", "strength": 0.8}],
-        evidence_against=[],
-        conflicts=[],
-        unique_claims=["独特观点1"],
-        differentiation="比搜索结果多给读者独特视角",
-        confidence=0.7,
+
+def test_synthesis_degrades_on_llm_failure(monkeypatch):
+    """A failed LLM call must degrade to an empty, low-confidence output.
+
+    Injects the failure rather than relying on the ambient absence of an API key,
+    so the test is deterministic and never makes a network call.
+    """
+    import article_pipeline.synthesis as S
+
+    monkeypatch.setattr(S, "call_with_fallback",
+                        lambda *a, **kw: {"error": "api_timeout", "message": "x"},
+                        raising=False)
+    result = S.run_synthesis({"annotations": [{"claim": "某个断言", "source": "书A"}]})
+
+    assert isinstance(result, SynthesisOutput)
+    assert result.confidence == 0.0
+    assert result.core_judgment == ""
+    assert result.unique_claims == []
+    assert result.differentiation == ""
+
+
+def test_material_density_discriminates_rich_from_empty():
+    """Density must be *ordered*, not merely inside [0, 1].
+
+    The previous assertion (`0 <= density <= 1`) is guaranteed by the `min(x, 1.0)`
+    in synthesis.py and could never fail.
+    """
+    empty = assess_material_density({"annotations": [], "web_articles": []})
+    rich = assess_material_density({
+        "annotations": [{"claim": f"断言{i}"} for i in range(10)],
+        "web_articles": [{"title": f"文章{i}"} for i in range(8)],
+        "has_conflicts": True,
+    })
+    # NOTE: empty material scores 0.075, not 0 — synthesis.py:238 awards an
+    # unconditional 0.3 to the "no conflicts" dimension even with zero sources,
+    # so the floor is 0.3/4. Harmless today (still far below MIN_CONFIDENCE) but
+    # asserted explicitly so the floor cannot silently drift upward into the
+    # passing range.
+    assert empty < 0.1, f"no material must score near 0, got {empty}"
+    assert empty < MIN_CONFIDENCE, "empty material must never clear the gate"
+    assert rich > empty
+    assert rich >= MIN_CONFIDENCE, (
+        f"a corpus this rich must clear the quality gate ({rich} < {MIN_CONFIDENCE})"
     )
-
-    assert output.core_judgment == "这是一句话判断"
-    assert len(output.evidence_for) == 1
-    assert output.confidence == 0.7
-    assert 0 <= output.confidence <= 1
-    print("✅ SynthesisOutput 结构正确")
-
-
-def test_synthesis_with_mock():
-    """测试 synthesis 在无 API key 时的降级行为"""
-    print("\n=== 测试 run_synthesis 降级行为（无 API key）===\n")
-
-    # 无 API key 时应该降级返回空结构
-    result = run_synthesis({"annotations": []})
-
-    assert isinstance(result, SynthesisOutput), f"返回类型错误: {type(result)}"
-    # 无 API key 时所有字段应该为空或 0
-    assert result.confidence == 0.0, f"无 API key 时 confidence 应该为 0: {result.confidence}"
-    print("✅ 无 API key 时正确降级返回空 SynthesisOutput")
-
-
-def test_material_density():
-    """测试素材密度评估"""
-    print("\n=== 测试 assess_material_density ===\n")
-
-    for case in test_cases:
-        density = assess_material_density(case["sources"])
-        assert 0 <= density <= 1, f"{case['keyword']}: density 超出范围 [{density}]"
-        print(f"✅ {case['keyword']}: density = {density:.2f}")
-        # 打印密度评估详情
-        annotations = case["sources"].get("annotations", [])
-        articles = case["sources"].get("web_articles", [])
-        has_conflicts = case["sources"].get("has_conflicts", False)
-        print(f"   annotations: {len(annotations)}, articles: {len(articles)}, has_conflicts: {has_conflicts}")
-
-
-def test_quality_gate():
-    """测试质量门控逻辑"""
-    print("\n=== 测试质量门控 ===\n")
-
-    # MIN_CONFIDENCE 以下的素材应该返回空 SynthesisOutput
-    # 这需要真实的 LLM 调用才能测试，这里只测试常量
-    assert 0 <= MIN_CONFIDENCE <= 1, f"MIN_CONFIDENCE 应该在 0-1 之间: {MIN_CONFIDENCE}"
-    print(f"✅ MIN_CONFIDENCE = {MIN_CONFIDENCE}")
-
-
-if __name__ == "__main__":
-    test_json_extraction()
-    test_format_sources()
-    test_synthesis_output_structure()
-    test_synthesis_with_mock()
-    test_material_density()
-    test_quality_gate()
-    print("\n=== 所有单元测试通过 ===")
-    print("\n提示：要测试真实 LLM 调用，请设置 AP_DS_API_KEY 或 DEEPSEEK_API_KEY 环境变量")
+    # Monotonic in annotation count.
+    few = assess_material_density({"annotations": [{"claim": "一条"}]})
+    many = assess_material_density({"annotations": [{"claim": f"第{i}条"} for i in range(6)]})
+    assert many > few

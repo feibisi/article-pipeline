@@ -62,6 +62,14 @@ def _check_unique_info(claims: list[str], ddg_results: list[dict]) -> float:
     if not claims:
         return 0.0
 
+    # Without a comparison corpus we cannot judge novelty. Awarding a perfect
+    # 10 here (the old behaviour when ddg_results was empty — which is the
+    # default in the live pipeline) meant every article was scored maximally
+    # "unique". Return a neutral score so an unverified dimension neither
+    # inflates nor unfairly penalises the overall density.
+    if not ddg_results:
+        return 5.0
+
     # Normalize DDG results for comparison
     ddg_snippets = []
     for r in ddg_results[:10]:

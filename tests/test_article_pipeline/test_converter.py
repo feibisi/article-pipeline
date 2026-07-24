@@ -1,6 +1,12 @@
 """Tests for converter module."""
 import pytest
-from article_pipeline.converter import (
+
+# converter.py imports bs4 at module level. Degrade to a skip instead of a
+# COLLECTION ERROR, which previously aborted the entire test session
+# (`Interrupted: 1 error during collection`) and hid all other results.
+pytest.importorskip("bs4", reason="beautifulsoup4 not installed")
+
+from article_pipeline.converter import (  # noqa: E402
     detect_article_type, md_to_gutenberg, extract_title, _strip_emoji,
 )
 

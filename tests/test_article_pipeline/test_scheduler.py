@@ -100,52 +100,30 @@ class TestGenerateAlert:
         assert alert.alert_type == "warning"
 
 
-class TestPublishRhythm:
-    def test_creation(self):
-        rhythm = PublishRhythm(
-            platform="wpcommunity",
-            frequency=2,
-            priority="high",
-        )
-        assert rhythm.platform == "wpcommunity"
-        assert rhythm.frequency == 2
-        assert rhythm.priority == "high"
 
-
-class TestScheduleAlert:
-    def test_creation(self):
-        alert = ScheduleAlert(
-            platform="test",
-            shortage=1,
-            week_start="2026-07-06T00:00:00+00:00",
-            message="Test message",
-            alert_type="warning",
-        )
-        assert alert.platform == "test"
-        assert alert.shortage == 1
-        assert alert.alert_type == "warning"
+# REMOVED: TestPublishRhythm.test_creation and TestScheduleAlert.test_creation —
+# dataclass constructor-echo tests. They instantiated a dataclass and asserted
+# back the literals just passed in; the "code under test" was the literal in the
+# test body. Zero defect-detection power.
 
 
 # Fixtures
 @pytest.fixture
-def mock_db_with_data():
-    """Create a mock database with test data."""
-    import sqlite3
+def mock_db_with_data(tmp_path):
+    """A real TaskDB, populated through the real public API.
 
-    class MockDB:
-        def __init__(self):
-            self.conn = sqlite3.connect(":memory:")
-            self.conn.execute("""
-                CREATE TABLE tasks (
-                    id INTEGER PRIMARY KEY,
-                    status TEXT,
-                    platform TEXT
-                )
-            """)
-            # 添加测试数据
-            self.conn.execute("INSERT INTO tasks (status, platform) VALUES ('queued', 'wpcommunity')")
-            self.conn.execute("INSERT INTO tasks (status, platform) VALUES ('queued', 'wpcommunity')")
-            self.conn.execute("INSERT INTO tasks (status, platform) VALUES ('queued', 'meta')")
-            self.conn.commit()
+    The previous version of this fixture hand-built its own 3-column
+    ``tasks (id, status, platform)`` table. That meant every test in
+    TestCheckQueueCoverage validated the scheduler against a schema that does
+    not exist in production: a column rename or a change to the status
+    vocabulary in db.py would break the real pipeline while these tests stayed
+    green. Use the real schema so schema drift actually fails a test.
+    """
+    from article_pipeline.db import TaskDB
 
-    yield MockDB()
+    db = TaskDB(str(tmp_path / "test.db"))
+    db.add_task("选题一", platform="wpcommunity")
+    db.add_task("选题二", platform="wpcommunity")
+    db.add_task("选题三", platform="meta")
+    yield db
+    db.conn.close()

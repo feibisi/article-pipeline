@@ -106,7 +106,31 @@ def call_messages_api(
         except requests.RequestException as e:
             return {"error": "request_failed", "message": str(e)}
 
-    return {"error": "max_retries_exceeded"}
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            # Malformed / non-JSON body: report it instead of raising out of the
+            # transport layer, so callers see a uniform error dict.
+            return {"error": "bad_response", "message": str(e)}
+
+    return {"error": "max_retries_exceeded",
+            "message": f"Failed after {max_retries} retries"}
+
+
+def resolve_endpoints(ds: dict) -> list[tuple[str, str]]:
+    """Build the (base_url, model) fallback chain from the deepseek config block.
+
+    ``writing_model`` is only attempted when explicitly configured. Defaulting it
+    to a hardcoded model id meant every call spent one guaranteed-4xx round trip
+    asking an endpoint for a model it does not serve.
+    """
+    endpoints = []
+    base_url = ds.get("base_url", "https://api.z.ai/api/anthropic")
+    writing_model = ds.get("writing_model")
+    if writing_model:
+        endpoints.append((ds.get("writing_url", base_url), writing_model))
+    endpoints.append((base_url, ds.get("model", "glm-5.1")))
+    endpoints.append((ds.get("fallback_url", "https://api.deepseek.com/anthropic"),
+                      ds.get("fallback_model", "deepseek-v4-pro")))
+    return [(u, m) for u, m in endpoints if u and m]
 
 
 def call_with_fallback(
@@ -143,18 +167,9 @@ def call_with_fallback(
     if temperature is None:
         temperature = ds.get("temperature")
 
-    endpoints = [
-        (ds.get("base_url", "https://api.z.ai/api/anthropic"),
-         ds.get("writing_model", "claude-sonnet-4-20250514")),
-        (ds.get("base_url", "https://api.z.ai/api/anthropic"),
-         ds.get("model", "glm-5.1")),
-        (ds.get("fallback_url", "https://api.deepseek.com/anthropic"),
-         ds.get("fallback_model", "deepseek-v4-pro")),
-    ]
-
-    for base_url, model in endpoints:
-        if not base_url or not model:
-            continue
+    result = {"error": "no_endpoint_configured",
+              "message": "deepseek config block resolved to no usable endpoint"}
+    for base_url, model in resolve_endpoints(ds):
         result = call_messages_api(base_url, api_key, model,
                                     system_prompt, user_prompt, max_tokens,
                                     temperature=temperature)
@@ -164,4 +179,5 @@ def call_with_fallback(
     return result  # Return last error
 
 
-__all__ = ["call_messages_api", "call_with_fallback", "get_api_key"]
+__all__ = ["call_messages_api", "call_with_fallback", "get_api_key",
+           "resolve_endpoints"]

@@ -41,9 +41,23 @@ _EMOJI_RE = re.compile(
 )
 
 
+# 语义符号白名单：这些字符落在 _EMOJI_RE 的区间里，但在中文技术文章里承载信息
+# （对比表格的支持/不支持、警示、列表项标记、箭头）。以前会被一并删掉，
+# 导致「✓ / ✗」对比表变成空单元格。
+_SEMANTIC_MARKS = set("✓✔✗✘×★☆⚠⚡→←↑↓↔●○◎▪▫■□◆◇◈※✱✳✴❖")
+
+# 顶层遇到这些原始 HTML 标签时用 wp:html 块包装，而不是塞进 <p>
+_BLOCK_LEVEL_HTML = {
+    "div", "figure", "section", "aside", "details", "svg", "iframe",
+    "video", "audio", "form", "dl", "nav", "header", "footer", "picture",
+}
+
+
 def _strip_emoji(text: str) -> str:
-    """移除文本中的 emoji 字符。"""
-    return _EMOJI_RE.sub("", text)
+    """移除文本中的 emoji 字符（保留承载语义的符号，见 _SEMANTIC_MARKS）。"""
+    def _repl(m: re.Match) -> str:
+        return "".join(ch for ch in m.group(0) if ch in _SEMANTIC_MARKS)
+    return _EMOJI_RE.sub(_repl, text)
 
 
 def detect_article_type(text: str) -> str:
@@ -60,7 +74,8 @@ def detect_article_type(text: str) -> str:
 
 
 def md_to_gutenberg(md_content: str, skip_first_h1: bool = True,
-                    article_type: str = "") -> str:
+                    article_type: str = "",
+                    inject_type_notice: bool = False) -> str:
     """将 Markdown 转换为 WordPress Gutenberg 块格式。
 
     Args:
@@ -68,6 +83,12 @@ def md_to_gutenberg(md_content: str, skip_first_h1: bool = True,
         skip_first_h1: 是否跳过第一个 H1（用作文章标题）
         article_type: 文章类型（security/release/weekly/plugin/service/general）
                       为空时自动检测
+        inject_type_notice: 是否按 article_type 在文章开头插入「安全通告」/
+                      「版本发布」提示框。**默认关闭**：这些文字是转换器
+                      凭关键词猜测后凭空加进正文的断言，既绕过了 review
+                      阶段的事实核查，也实测把「systemd timer 基础」变成
+                      「请相关站长及时检查并更新受影响的插件」。只有在
+                      调用方能确认文章类型时才应打开。
 
     Returns:
         Gutenberg 块格式 HTML
@@ -171,11 +192,19 @@ def md_to_gutenberg(md_content: str, skip_first_h1: bool = True,
         elif tag == "img":
             output.append(_make_image_block(el))
 
-        # --- 其他：当段落处理 ---
+        # --- 其他 ---
         else:
             text = el.get_text().strip()
-            if text:
-                output.append(_wrap_paragraph(str(el)))
+            has_content = bool(text) or el.find(["img", "svg", "iframe", "video"])
+            if has_content:
+                if tag in _BLOCK_LEVEL_HTML:
+                    # 块级原始 HTML（figure / div / details / svg …）不能塞进 <p>：
+                    # 浏览器会在 <p><figure> 处自动断开段落，留下一个空 <p>，
+                    # Gutenberg 也会把它当成损坏的段落区块。改用 wp:html。
+                    output.append(
+                        f"<!-- wp:html -->\n{str(el)}\n<!-- /wp:html -->")
+                else:
+                    output.append(_wrap_paragraph(str(el)))
 
     blocks = "\n\n".join(output)
 
@@ -183,7 +212,8 @@ def md_to_gutenberg(md_content: str, skip_first_h1: bool = True,
     blocks = _add_h2_separators(blocks)
 
     # 4. 按文章类型做后处理
-    blocks = _post_process_for_type(blocks, article_type, md_content)
+    blocks = _post_process_for_type(blocks, article_type, md_content,
+                                    inject_type_notice=inject_type_notice)
 
     # 5. 最终清理：去除所有 emoji
     blocks = _strip_emoji(blocks)
@@ -235,11 +265,15 @@ def _add_h2_separators(blocks: str) -> str:
 
 # --- 文章类型后处理 ---
 
-def _post_process_for_type(blocks: str, article_type: str, md_content: str) -> str:
-    """根据文章类型对生成的 Gutenberg 块做后处理。"""
-    if article_type == "security":
+def _post_process_for_type(blocks: str, article_type: str, md_content: str,
+                           inject_type_notice: bool = False) -> str:
+    """根据文章类型对生成的 Gutenberg 块做后处理。
+
+    inject_type_notice=False 时只做纯排版处理（分隔线），不往正文里加任何文字。
+    """
+    if inject_type_notice and article_type == "security":
         blocks = _add_security_notice(blocks)
-    elif article_type == "release":
+    elif inject_type_notice and article_type == "release":
         blocks = _add_release_header(blocks, md_content)
     elif article_type == "weekly":
         blocks = _add_weekly_section_separators(blocks)
@@ -267,7 +301,12 @@ def _add_security_notice(blocks: str) -> str:
 
 def _add_release_header(blocks: str, md_content: str) -> str:
     """版本发布类文章：在开头插入版本信息。"""
-    ver_match = re.search(r'(\d+\.\d+(?:\.\d+)?(?:\s*(?:beta|rc|alpha)\s*\d*)?)', md_content[:500], re.IGNORECASE)
+    # 必须是「紧邻版本字样的版本号」才算，否则任何一个小数（缓存命中率 1.5、
+     # 表格里的 1.2.0）都会被说成"本文介绍 X 版本"。
+    ver_match = re.search(
+        r'(?:版本|version|v|release|发布)\s*[：:]?\s*'
+        r'(\d+\.\d+(?:\.\d+)?(?:\s*(?:beta|rc|alpha)\s*\d*)?)',
+        md_content[:500], re.IGNORECASE)
     version = ver_match.group(1) if ver_match else ""
     if not version:
         return blocks
@@ -345,7 +384,10 @@ def _process_inline(el: Tag) -> str:
         elif isinstance(child, Tag):
             if child.name == "a":
                 href = child.get("href", "")
-                text = child.get_text()
+                # decode_contents() 保留链接内部的行内格式；以前用 get_text()，
+                # 于是 [**官方文档**](url) 里的加粗、[`wp-config.php`](url) 里的
+                # 等宽代码全被抹平成纯文本。
+                text = child.decode_contents()
                 if href.startswith(("http://", "https://")):
                     parts.append(f'<a href="{href}" target="_blank" rel="noopener noreferrer">{text}</a>')
                 else:
@@ -375,7 +417,12 @@ def _make_image_block(img: Tag) -> str:
 
 
 def _make_list_block(el: Tag) -> str:
-    """生成列表块，支持嵌套。"""
+    """生成列表块，支持嵌套。
+
+    每个 <li> 必须包在 wp:list-item 块里、<ul>/<ol> 必须带 wp-block-list class，
+    否则 WP 6.x 编辑器会把整个列表判为「此区块包含意外或无效的内容」，
+    人工二次编辑时必须点「尝试恢复区块」。
+    """
     tag = el.name
     wp_type = "list" if tag == "ul" else 'list {"ordered":true}'
 
@@ -389,26 +436,21 @@ def _make_list_block(el: Tag) -> str:
                     break
                 text_parts.append(str(child))
             text = "".join(text_parts).strip()
-            items.append(f"<li>{text}\n{_make_list_block(nested)}</li>")
+            inner = f"<li>{text}\n{_make_list_block(nested)}</li>"
         else:
-            items.append(f"<li>{_process_inline(li)}</li>")
+            inner = f"<li>{_process_inline(li)}</li>"
+        items.append(f"<!-- wp:list-item -->\n{inner}\n<!-- /wp:list-item -->")
 
     items_html = "\n".join(items)
     return (
         f"<!-- wp:{wp_type} -->\n"
-        f"<{tag}>\n{items_html}\n</{tag}>\n"
+        f'<{tag} class="wp-block-list">\n{items_html}\n</{tag}>\n'
         f"<!-- /wp:list -->"
     )
 
 
 def _make_table_block(el: Tag) -> str:
     """生成表格块，带 stripes 样式、固定布局和 colgroup。"""
-    # 收集列数
-    first_row = el.find("tr")
-    col_count = 0
-    if first_row:
-        col_count = len(first_row.find_all(["th", "td"]))
-
     head_rows = []
     thead = el.find("thead")
     if thead:
@@ -423,22 +465,19 @@ def _make_table_block(el: Tag) -> str:
             cells = [f"<td>{_process_inline(td)}</td>" for td in tr.find_all("td")]
             body_rows.append(f"<tr>{''.join(cells)}</tr>")
 
-    # 生成 colgroup（均分宽度）
-    colgroup = ""
-    if col_count > 0:
-        width = round(100 / col_count)
-        cols = "".join(f'<col style="width:{width}%" />' for _ in range(col_count))
-        colgroup = f"<colgroup>{cols}</colgroup>"
-
+    # 不再生成 <colgroup>：core/table 区块的 save 输出里没有 colgroup，
+    # 多出来的标签会让编辑器判定区块内容无效。has-fixed-layout 本身就是均分列宽。
     head_html = f"<thead>{''.join(head_rows)}</thead>" if head_rows else ""
     body_html = f"<tbody>{''.join(body_rows)}</tbody>" if body_rows else ""
+    if not body_html and not head_html:
+        return ""
 
     attrs = {"hasFixedLayout": True, "className": "is-style-stripes"}
-    attrs_json = json.dumps(attrs, ensure_ascii=False)
+    attrs_json = json.dumps(attrs, ensure_ascii=False, separators=(",", ":"))
 
     return (
         f'<!-- wp:table {attrs_json} -->\n'
         f'<figure class="wp-block-table is-style-stripes">'
-        f'<table class="has-fixed-layout">{colgroup}{head_html}{body_html}</table></figure>\n'
+        f'<table class="has-fixed-layout">{head_html}{body_html}</table></figure>\n'
         f'<!-- /wp:table -->'
     )

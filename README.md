@@ -60,34 +60,61 @@ keyword → Research → SYNTHESIS → FRAMEWORK → STYLE → PROSODY → COMPI
 ## 快速开始
 
 ```bash
-# 安装
+# 安装（提供 `ap` 和 `article-pipeline` 两个等价入口）
 pip install -e .
+
+# 配置检查：校验 config.yaml + 凭据环境变量 + 队列健康
+ap doctor
 
 # 配置
 # 设置环境变量: AP_DS_API_KEY, AP_WP_USERNAME, AP_WP_APP_PASSWORD
+# 端点配置: ~/.config/article-pipeline/config.yaml（不放凭据）
 
-# 添加选题
-article-pipeline add --keyword "WordPress 全站编辑入门" --category tutorial
+# 添加选题（含选题去重 + 选题价值过滤）
+ap add "WordPress 全站编辑入门" --category tutorial
 
-# 执行管线
-article-pipeline run --limit 5
+# 执行管线（--dry-run 只预览，不占用任务）
+ap run --limit 5
 
 # 审查
-article-pipeline review-server  # → http://localhost:8765
+ap review-queue                                  # 终端列出待审文章
+python -m article_pipeline.review_server         # Web UI → http://localhost:8765
 ```
 
 ## CLI
 
 ```
-article-pipeline add --keyword "..." --category <品类> [--priority 1|2|3]
-article-pipeline list [--status queued|synthesizing|framework|writing|reviewing]
-article-pipeline run [--limit 5]
-article-pipeline continue <task_id>
-article-pipeline recover [--max-minutes 30]
-article-pipeline review-server
-article-pipeline publish <task_id>
-article-pipeline skip <task_id> --reason "..."
+ap add "<关键词>" [--category <品类>] [--priority 1-5] [--allow-duplicate] [--skip-filter]
+ap list [--status queued|synthesizing|framework|writing|reviewing] [--category X]
+ap run [--limit 5] [--category X] [--max-priority N] [--dry-run]
+ap status <task_id>              # 单任务详情 + 失败历史
+ap resume <task_id>              # 从当前阶段续跑（别名: ap continue）
+ap recover [--max-minutes 30] [--dry-run]    # 把卡住的任务重新入队
+ap approve-outline <task_id>     # TIER_EXTERNAL 提纲人工放行
+ap review-queue                  # 待人工审查列表
+ap publish <task_id>
+ap skip <task_id> --reason "..."
+ap unpublish <task_id>
+ap schedule-check [--notify]     # 队列供给 vs 发布节奏
+ap doctor                        # 配置校验 + 队列健康
 ```
+
+Web 审查界面不是子命令，用 `python -m article_pipeline.review_server` 启动。
+
+## 运维
+
+| 场景 | 命令 |
+|------|------|
+| 队列/健康巡检 | `scripts/pipeline-monitor.sh` |
+| 批量生产 | `scripts/pipeline-run.sh --batch 5 [--dry-run]` |
+| 任务卡住 | `ap recover --dry-run` → `ap recover` |
+| 想知道昨晚挂哪了 | `ap status <id>`（含 error_log）+ `~/workspaces/article-pipeline/runs/*.json` |
+| 僵尸数据清理 | `scripts/pipeline-cleanup.py`（默认 dry-run，`--execute --yes` 才写，且永不删行） |
+
+**选题供给靠人工**：目前唯一入口是 `ap add`。队列空了管线就空转，
+`ap schedule-check` 只报缺口、不自动产出选题。systemd timer
+(`article-pipeline.timer`) 已安装但**处于 disabled 状态**，启用等于开启无人值守
+自动生产，需人工确认后再 `systemctl --user enable --now article-pipeline.timer`。
 
 ## 品类（21 种，5 文件契约）
 

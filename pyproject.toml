@@ -16,6 +16,11 @@ dependencies = [
     "jinja2>=3.1",
     "markdown>=3.4",
     "nh3>=0.3",
+    # Hard runtime dependency of article_pipeline.converter (bs4 import at
+    # module level). It was missing here, which made `tests/` fail at
+    # COLLECTION time on a clean install — i.e. the whole suite was skipped,
+    # not just the converter tests.
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]
@@ -32,3 +37,10 @@ include = ["article_pipeline*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# Tests doing live DDG/MCP/SSH/LLM I/O are opt-in: `pytest -m network`.
+# Before this, two such tests made a bare `pytest tests` hang forever, so the
+# suite was effectively unrunnable and nobody saw its results.
+addopts = "-m 'not network'"
+markers = [
+    "network: hits live external services (DDG, MCP, SSH, LLM APIs); deselected by default",
+]
