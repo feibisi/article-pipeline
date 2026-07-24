@@ -7,10 +7,19 @@ from article_pipeline.research import (
 )
 
 
+@pytest.mark.network
 def test_search_cocobook_returns_list():
-    """cocobook search returns a list of results."""
+    """cocobook search returns a list of results.
+
+    Marked `network`: this does live MCP/SSH I/O and was one of the two tests
+    that made `pytest tests` hang indefinitely. It is also nearly powerless —
+    `isinstance(results, list)` passes when every backend is down and the
+    function returns `[]`, i.e. it goes green precisely when retrieval is
+    broken. Kept as an opt-in smoke test with a real assertion.
+    """
     results = search_cocobook("设计模式")
     assert isinstance(results, list)
+    assert results, "live cocobook search returned nothing for a common term"
 
 
 def test_search_cocobook_empty_query():

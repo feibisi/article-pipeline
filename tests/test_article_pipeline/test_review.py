@@ -80,10 +80,19 @@ WP Rocket 是商业插件中的标杆。售价 $59/年。
 
 根据场景选择最合适的插件。小型站点用免费方案即可。"""
     result = run_self_review(article, tier="A", research_note="测试研究笔记")
-    assert "ai_check" in result
-    assert "word_count" in result
-    assert "format" in result
-    assert "overall_pass" in result
+    # Key presence alone is worthless — every check could return garbage and
+    # this test would still pass. Assert the values the pipeline acts on.
+    assert result["format"]["has_h2"] is True
+    assert result["word_count"]["pass"] is False, "this sample is ~300 chars, tier A wants 1500+"
+    assert 0.0 <= result["ai_check"]["score"] <= 10.0
+    assert 0.0 <= result["overall_score"] <= 10.0
+    assert isinstance(result["overall_pass"], bool)
+    # A short article that fails word count can never be an auto-pass.
+    assert result["overall_pass"] is False
+    assert result["value_density"]["recommendation"] in ("pass", "needs_human", "fail")
+    assert result["publish_gate"]["decision"] in ("pass", "needs_human", "fail")
+    # Suggestions must be produced when the article does not pass.
+    assert len(result["suggestions"]) > 0
 
 
 class TestComputePublishGate:
@@ -197,12 +206,17 @@ class TestPublishGateIntegration:
 更多内容。""" + "测试内容。" * 100
 
         result = run_self_review(article, tier="A")
-        assert "publish_gate" in result
         gate = result["publish_gate"]
-        assert "decision" in gate
-        assert "reason" in gate
-        assert "signals" in gate
-        assert gate["decision"] in ("pass", "needs_human", "fail")
+        # `decision in (all three possible values)` is tautological. Assert the
+        # actual verdict for this input: filler repeated 100x has no density.
+        assert gate["decision"] == "fail", f"filler must fail, got {gate}"
+        assert result["value_density"]["overall_score"] < 4.0
+        assert gate["reason"], "a blocking decision must carry a reason"
+        assert gate["blocking_reasons"], "a blocking decision must list reasons"
+        assert gate["signals"]["differentiation"] is False
+        assert gate["signals"]["unique_claims"] is False
+        # And the verdict must be enforced, not merely recorded.
+        assert result["overall_pass"] is False
 
     def test_publish_gate_with_differentiation(self):
         """differentiation parameter should affect publish_gate."""
@@ -247,15 +261,27 @@ class TestPublishGateIntegration:
         )
         assert result["publish_gate"]["signals"]["unique_claims"] is True
 
+        # Negative control: without the claims the same article must flip to
+        # False. Without this, a hardcoded `True` would pass the test above.
+        result_none = run_self_review(
+            article, tier="A",
+            research_output={**research_output_with_claims, "unique_claims": []},
+        )
+        assert result_none["publish_gate"]["signals"]["unique_claims"] is False
+
     def test_publish_gate_boundary_value_density(self):
-        """Test boundary conditions for value_density."""
-        # Low quality article should get fail
+        """A near-empty article must be blocked as slop.
+
+        The original version of this test wrapped its only assertion in
+        `if score < 4.0:` — so if scoring ever drifted upward the test asserted
+        nothing and stayed green. Assert unconditionally.
+        """
         slop_article = """
 ## 测试
 
 这是一篇文章。
 """
         result = run_self_review(slop_article, tier="A")
-        # slop article should have low value_density
-        if result["value_density"]["overall_score"] < 4.0:
-            assert result["publish_gate"]["decision"] == "fail"
+        assert result["value_density"]["overall_score"] < 4.0
+        assert result["publish_gate"]["decision"] == "fail"
+        assert result["overall_pass"] is False

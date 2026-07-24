@@ -284,13 +284,31 @@ class BenchmarkTopicFilter:
     # 技术限定词（可以拯救通用问题）
     TECH_QUALIFIERS = ["配置", "设置", "优化", "修复", "解决"]
 
+    # 结果正文可能出现的字段名。research.search_web() 返回 "snippet"，
+    # 而本类原先只读 "body" —— 于是所有筛子只看得见标题，正文信号全部丢失。
+    _TEXT_FIELDS = ("title", "body", "snippet", "description", "text")
+
     def __init__(self, search_results: list[dict] = None):
         """初始化过滤器
 
         Args:
-            search_results: 搜索结果列表，格式：[{"title": str, "body": str}, ...]
+            search_results: 搜索结果列表，格式：[{"title": str, "body"|"snippet": str}, ...]
         """
         self.search_results = search_results or []
+
+    @classmethod
+    def _result_text(cls, r: dict) -> str:
+        """把一条搜索结果的标题与正文合成一段可检索文本（兼容 body/snippet）。"""
+        return " ".join(str(r.get(k, "") or "") for k in cls._TEXT_FIELDS).lower()
+
+    @staticmethod
+    def _tokens(text: str) -> set[str]:
+        """英文词（>=3 字母）+ 中文 bigram，用于比较标题之间的真实重合度。"""
+        toks = set(re.findall(r'[a-z]{3,}', text.lower()))
+        for run in re.findall(r'[一-龥]{2,}', text):
+            for i in range(len(run) - 1):
+                toks.add(run[i:i + 2])
+        return toks
 
     def filter_topic(self, keyword: str, category: str = "") -> BenchmarkFilterResult:
         """运行全部五重过滤
@@ -353,16 +371,14 @@ class BenchmarkTopicFilter:
             kw_lower = self.keyword.lower()
             relevant_count = sum(
                 1 for r in self.search_results[:10]
-                if kw_lower in r.get("title", "").lower() or kw_lower in r.get("body", "").lower()
+                if kw_lower in self._result_text(r)
             )
             return relevant_count >= 3
 
         # 检查结果质量：核心词是否出现在标题或正文中
         relevant_count = 0
         for r in self.search_results[:10]:
-            title = r.get("title", "").lower()
-            snippet = r.get("body", "").lower()
-            combined = title + " " + snippet
+            combined = self._result_text(r)
 
             # 至少有一个核心词出现在结果中
             if any(kw in combined for kw in keywords):
@@ -380,7 +396,7 @@ class BenchmarkTopicFilter:
 
         pain_signals = 0
         for r in self.search_results[:5]:
-            text = (r.get("title", "") + " " + r.get("body", "")).lower()
+            text = self._result_text(r)
             for kw in self.PAIN_KEYWORDS:
                 if kw in text:
                     pain_signals += 1
@@ -398,7 +414,7 @@ class BenchmarkTopicFilter:
 
         found_types: set[str] = set()
         for r in self.search_results[:10]:
-            text = (r.get("title", "") + " " + r.get("body", "")).lower()
+            text = self._result_text(r)
             for mtype, keywords in self.MATERIAL_SIGNALS.items():
                 for kw in keywords:
                     if kw.lower() in text:
@@ -437,10 +453,23 @@ class BenchmarkTopicFilter:
 
         return True
 
+    # 同质判定：非选题词的共享 token 需覆盖这么大比例的标题才算"已被写烂"
+    HOMOGENEITY_TITLE_RATIO = 0.6
+    # 少于这么多标题，样本太小，不做同质判定
+    HOMOGENEITY_MIN_TITLES = 5
+
     def _check_differentiation(self) -> bool:
         """筛子 5：值得写吗？
 
         检测：是否有差异化空间（是否已有大量同质内容）
+
+        修正记录：原实现把标题里所有 2 字以上中文 / 3 字母以上英文都当作"共同
+        词"，只要任一个出现在半数标题中就判定同质。而搜索结果的标题按定义几乎
+        都含选题词本身，所以只要有 >=5 条结果，这一筛几乎必然返回 False ——
+        "DDG 同质判定不可靠"的怀疑成立。现在：
+          1. 剔除来自选题词本身的 token（选题词出现在结果里是相关性，不是同质）；
+          2. 阈值提到 60% 且要求样本 >=5；
+          3. 只有"非选题词"的角度词高度重合才算同质。
         """
         if not self.search_results:
             return True  # 没有搜索结果时默认通过
@@ -448,23 +477,20 @@ class BenchmarkTopicFilter:
         titles = [r.get("title", "") for r in self.search_results[:10]]
         titles = [t for t in titles if t]
 
-        # 检查标题相似度
-        if len(titles) >= 5:
-            # 提取标题中的共同词（中文2字以上或英文3字母以上）
-            common_words: set[str] = set()
-            for t in titles[:5]:
-                # 中文词（2字以上）
-                cn_words = re.findall(r'[一-龥]{2,}', t)
-                # 英文词（3字母以上）
-                en_words = re.findall(r'[a-zA-Z]{3,}', t.lower())
-                common_words.update(cn_words)
-                common_words.update(en_words)
+        if len(titles) >= self.HOMOGENEITY_MIN_TITLES:
+            keyword_tokens = self._tokens(self.keyword)
+            threshold = max(2, int(len(titles) * self.HOMOGENEITY_TITLE_RATIO + 0.999))
 
-            # 如果某个词在半数以上标题中出现，说明同质严重
-            for word in common_words:
-                count = sum(1 for t in titles if word.lower() in t.lower())
-                if count >= len(titles) / 2:
-                    return False
+            token_titles: dict[str, int] = {}
+            for t in titles:
+                for tok in self._tokens(t) - keyword_tokens:
+                    token_titles[tok] = token_titles.get(tok, 0) + 1
+
+            shared = sorted(tok for tok, n in token_titles.items() if n >= threshold)
+            if shared:
+                logger.info("Differentiation check: keyword=%r homogeneous on %s",
+                            self.keyword, shared[:5])
+                return False
 
         # 检查是否是"如何"类问题
         for pattern in self.HOW_TO_PATTERNS:

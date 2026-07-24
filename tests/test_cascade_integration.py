@@ -6,6 +6,8 @@
 3. 类型契约正确传递
 """
 
+import json
+
 import pytest
 from article_pipeline.contracts import (
     SynthesisOutput,
@@ -158,8 +160,8 @@ class TestCascadeDataFlow:
         assert "测试概念" in json_str
         assert "测试标题" in json_str
 
-    def test_outline_from_layers_format(self):
-        """outline_from_layers 接受正确的数据格式"""
+    def test_outline_from_layers_format(self, monkeypatch):
+        """generate_outline_from_layers 真的把上游各层的数据带进了 prompt。"""
         synthesis_data = {
             "core_judgment": "Nginx 缓存可显著降低后端压力",
             "evidence_for": [{"source": "官方", "claim": "缓存有效"}],
@@ -203,12 +205,59 @@ class TestCascadeDataFlow:
             "rhythm_hint": "层层递进",
         }
 
-        # 验证函数接受这些格式（不实际调用 LLM）
-        # 这里只验证数据结构兼容性
-        assert synthesis_data["core_judgment"]
-        assert framework_data["method"]
-        assert style_data["vector"]["density"]
-        assert prosody_data["sample_type"]
+        # Previously this test asserted only the truthiness of the four dict
+        # literals defined above — generate_outline_from_layers was imported at
+        # the top of the file and never called, so the function it claimed to
+        # cover had zero coverage. Call it for real, with the LLM stubbed so the
+        # test stays offline, and assert the cascade actually reaches the prompt.
+        import article_pipeline.outline as O
+
+        seen = {}
+
+        def fake_api(prompt):
+            seen["prompt"] = prompt
+            # _try_api returns the outline dict FLAT (outline.py:450-452).
+            return {
+                "title": "Nginx 缓存配置",
+                "differentiation": "包含 elementary 实测的命中率数据，搜索结果均未提供",
+                "sections": [{"h2": "终态预览"}, {"h2": "配置步骤"}],
+            }
+
+        monkeypatch.setattr(O, "_try_api", fake_api)
+
+        outline = O.generate_outline_from_layers(
+            keyword="Nginx 缓存",
+            category="tutorial",
+            platform="wptea",
+            synthesis_output=synthesis_data,
+            framework_output=framework_data,
+            style_output=style_data,
+            prosody_output=prosody_data,
+        )
+        assert isinstance(outline, dict), f"unexpected return type: {type(outline)}"
+        assert "error" not in outline, outline
+
+        # Every upstream layer must be represented in the prompt. A regression
+        # that silently drops one of these is exactly the kind of cascade bug
+        # asserting on dict literals could never catch.
+        prompt = seen["prompt"]
+        assert "Nginx 缓存可显著降低后端压力" in prompt, "synthesis core_judgment dropped"
+        assert "实测减少 70% 请求" in prompt, "synthesis unique_claims dropped"
+        assert "终态预览" in prompt and "配置步骤" in prompt, "framework structure dropped"
+        assert "展示终态" in prompt, "style constraints dropped"
+        assert "层层递进" in prompt, "prosody rhythm_hint dropped"
+
+        # And the differentiation gate must reject an outline that has no
+        # differentiation — this is the only place upstream of writing where
+        # "this article has no reason to exist" can still be caught cheaply.
+        monkeypatch.setattr(O, "_try_api", lambda p: {"title": "x", "sections": []})
+        monkeypatch.setattr(O, "_try_ollama",
+                            lambda p, u, m: {"error": "unavailable"})
+        rejected = O.generate_outline_from_layers(
+            keyword="Nginx 缓存", category="tutorial", platform="wptea",
+            synthesis_output=synthesis_data, framework_output=framework_data,
+        )
+        assert rejected.get("error") == "differentiation_rejected"
 
 
 class TestGenreCoverage:
@@ -234,7 +283,12 @@ class TestGenreCoverage:
         """所有品类都有 prosody 目录"""
         from pathlib import Path
 
-        genres_dir = Path("article_pipeline/genres")
+        import article_pipeline
+
+        # Resolve relative to the installed package, not the cwd. The previous
+        # `Path("article_pipeline/genres")` failed spuriously whenever pytest was
+        # invoked from anywhere but the repo root.
+        genres_dir = Path(article_pipeline.__file__).parent / "genres"
         # 品类名 → 目录名映射（带连字符的品类名）
         genre_to_dir = {
             "tutorial": "tutorial",

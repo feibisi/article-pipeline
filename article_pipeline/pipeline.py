@@ -9,7 +9,9 @@ import json
 import yaml
 from datetime import datetime, timezone
 from pathlib import Path
-from article_pipeline.db import TaskDB
+from article_pipeline.db import (
+    TaskDB, TERMINAL_STATES, HUMAN_GATE_STATES, ACTIVE_STATES,
+)
 from article_pipeline.research import gather_research, build_research_note
 from article_pipeline.synthesis import run_synthesis
 from article_pipeline.framework import run_framework
@@ -48,13 +50,124 @@ def _write_run(task_id: str, workspace: str, status: str,
 class Pipeline:
     """Article production pipeline orchestrator."""
 
+    # status -> the method that owns that stage. Single source of truth for
+    # the cascade order; anything not listed here is a gate or terminal state.
+    STAGE_METHODS = {
+        "researching": "process_research",
+        "synthesizing": "process_synthesis",
+        "framework": "process_framework",
+        "prosody": "process_prosody",
+        "compiling": "process_compile",
+        "outlining": "process_outline",
+        "writing": "process_writing",
+    }
+
     def __init__(self, db: TaskDB | None = None):
         self.db = db or TaskDB()
         self.config = load_config()
 
-    def run(self, limit: int = 5):
-        """Process next batch of queued tasks through the pipeline."""
-        batch = self.db.get_next_batch(limit=limit)
+    # ── Stage driver ──
+
+    def _drive(self, task_id: int, max_steps: int = 24) -> list[dict]:
+        """Advance one task as far as it can go, one stage at a time.
+
+        Replaces the old deeply-nested if-chain in run(), which
+        (a) mis-indented the outline branch so a TIER_EXTERNAL task that
+        stopped at the human gate was written anyway, and (b) gave no way to
+        tell which stage failed. Driving off the DB status instead of a
+        hardcoded chain means resume/recover use the exact same path as run.
+        """
+        results: list[dict] = []
+        for _ in range(max_steps):
+            task = self.db.get_task(task_id)
+            if not task:
+                print(f"  Task #{task_id} disappeared.")
+                break
+            status = task["status"]
+
+            if status in TERMINAL_STATES:
+                print(f"  [{status}] terminal — stopping.")
+                break
+            if status == "outline_review":
+                print(f"  [gate] Outline awaits approval: "
+                      f"ap approve-outline {task_id}")
+                break
+            if status == "reviewing":
+                # Human gate. Self-review runs once, then we hand over.
+                if any(r.get("stage") == "review" for r in results):
+                    break
+                try:
+                    r = self.process_review(task_id)
+                except Exception as e:
+                    self._record_stage_failure(task_id, "review", e)
+                    break
+                results.append({"task_id": task_id, "stage": "review",
+                                "passed": bool(r.get("overall_pass"))})
+                print(f"  [gate] Awaiting human review: ap review-queue")
+                break
+            if status == "queued":
+                self.db.update_status(task_id, "researching")
+                continue
+
+            method = self.STAGE_METHODS.get(status)
+            if method is None:
+                self._record_stage_failure(
+                    task_id, status,
+                    f"unknown status '{status}' — no stage owns it")
+                break
+
+            try:
+                r = getattr(self, method)(task_id)
+            except Exception as e:
+                self._record_stage_failure(task_id, status, e)
+                break
+
+            if r is None:
+                # Stage deliberately stopped (skipped, or requeued for retry).
+                after = self.db.get_task(task_id)
+                print(f"  [{status}] stopped — task now "
+                      f"'{after['status'] if after else '?'}'")
+                break
+
+            results.append(r)
+
+            after = self.db.get_task(task_id)
+            if after and after["status"] == status:
+                # A stage that returns success must advance the status,
+                # otherwise we would spin here forever.
+                self._record_stage_failure(
+                    task_id, status,
+                    f"stage '{method}' returned success without leaving "
+                    f"status '{status}'")
+                break
+        else:
+            self._record_stage_failure(
+                task_id, "driver", f"exceeded {max_steps} stage transitions")
+        return results
+
+    def _record_stage_failure(self, task_id: int, stage: str, error) -> None:
+        """Mark a task failed at a named stage, with a durable audit record."""
+        import traceback
+        tb = traceback.format_exc() if isinstance(error, BaseException) else ""
+        print(f"  [{stage}] FAILED: {error}")
+        self.db.record_failure(task_id, stage, str(error), tb)
+        self.db.update_status(task_id, "skipped", {
+            "skip_reason": f"{stage}_error: {error}",
+            "failed_stage": stage,
+        })
+        _write_run(f"{stage}-{task_id}", "article-pipeline", "failed",
+                   issues=[{"stage": stage, "error": str(error)[:500]}],
+                   next_step=f"inspect: ap status {task_id}")
+
+    def run(self, limit: int = 5, category: str | None = None,
+            max_priority: int | None = None):
+        """Process next batch of queued tasks through the pipeline.
+
+        NOTE: this claims tasks itself. Callers must not call
+        get_next_batch() first — that double-claims and skips tasks.
+        """
+        batch = self.db.get_next_batch(limit=limit, category=category,
+                                       max_priority=max_priority)
         if not batch:
             print("No queued tasks found.")
             return []
@@ -64,77 +177,37 @@ class Pipeline:
             tid = task["id"]
             print(f"\n{'='*60}")
             print(f"Processing #{tid}: {task['keyword']} [{task['category']}]")
-
-            try:
-                r = self.process_research(tid)
-                if r:
-                    results.append(r)
-                    r = self.process_synthesis(tid)
-                    if r:
-                        results.append(r)
-                        r = self.process_framework(tid)
-                        if r:
-                            results.append(r)
-                            r = self.process_prosody(tid)
-                            if r:
-                                results.append(r)
-                                r = self.process_compile(tid)
-                                if r:
-                                    results.append(r)
-                                    r = self.process_outline(tid)
-                            if r:
-                                results.append(r)
-                                r = self.process_writing(tid)
-                                if r:
-                                    results.append(r)
-                                    r = self.process_review(tid)
-                                    if r:
-                                        results.append(r)
-            except Exception as e:
-                print(f"  FAILED: {e}")
-                self.db.update_status(tid, "skipped",
-                                      {"skip_reason": f"pipeline_error: {e}"})
+            results.extend(self._drive(tid))
 
         return results
 
     def resume(self, task_id: int):
-        """Resume a task from its current status."""
+        """Resume a task from its current status.
+
+        Every automated state is resumable now. Previously anything in
+        synthesizing/framework/prosody/compiling hit "not resumable" and
+        could only be freed by hand-editing SQLite.
+        """
         task = self.db.get_task(task_id)
         if not task:
             print(f"Task #{task_id} not found.")
-            return
+            return []
 
         status = task["status"]
-        print(f"Resuming #{task_id} from status: {status}")
+        if status in TERMINAL_STATES:
+            print(f"Task #{task_id} is {status} — nothing to resume.")
+            return []
+        if status == "outline_review":
+            print(f"Task #{task_id} needs outline approval: "
+                  f"ap approve-outline {task_id}")
+            return []
+        if status == "reviewing":
+            print(f"Task #{task_id} already written and self-reviewed. "
+                  f"Use: ap review-queue / ap publish {task_id}")
+            return []
 
-        try:
-            if status in ("researching", "outlining"):
-                r = self.process_research(task_id)
-                if r:
-                    r = self.process_outline(task_id)
-                    # outline may have stopped for human gate (TIER_EXTERNAL)
-                    task_after = self.db.get_task(task_id)
-                    if task_after and task_after["status"] == "outline_review":
-                        print("Outline awaiting human approval. Use: article-pipeline approve-outline")
-                        return
-                    if r:
-                        r = self.process_writing(task_id)
-                        if r:
-                            self.process_review(task_id)
-            elif status == "outline_review":
-                print("Task requires outline approval. Use: article-pipeline approve-outline")
-            elif status == "writing":
-                r = self.process_writing(task_id)
-                if r:
-                    self.process_review(task_id)
-            elif status == "reviewing":
-                print("Already in review. Use: article-pipeline review")
-            else:
-                print(f"Status '{status}' not resumable.")
-        except Exception as e:
-            print(f"  FAILED: {e}")
-            self.db.update_status(task_id, "skipped",
-                                  {"skip_reason": f"resume_error: {e}"})
+        print(f"Resuming #{task_id} from status: {status}")
+        return self._drive(task_id)
 
     def approve_outline(self, task_id: int):
         """Approve a TIER_EXTERNAL outline and proceed to writing."""
@@ -145,9 +218,11 @@ class Pipeline:
         if task["status"] != "outline_review":
             print(f"Task #{task_id} is not awaiting outline review (current: {task['status']}).")
             return
-        self.db.update_status(task_id, "writing")
+        self.db.update_status(task_id, "writing",
+                              {"outline_approved_at":
+                               datetime.now(timezone.utc).isoformat()})
         print(f"Outline approved for #{task_id}. Proceeding to writing...")
-        return self.process_writing(task_id)
+        return self._drive(task_id)
 
     def process_research(self, task_id: int) -> dict | None:
         """Stage 2: Gather research for a task."""
@@ -158,16 +233,44 @@ class Pipeline:
         note = build_research_note(task["keyword"], sources)
 
         self.db.save_stage_output(task_id, "research_note", note)
-        # Save sources for synthesis layer (in meta_json)
-        sources_json = json.dumps({
+        # Merge sources into meta_json for the synthesis layer. This used to
+        # overwrite the whole blob, discarding trust_tier, retry counters and
+        # status_changed_at along with it.
+        meta = json.loads(task.get("meta_json", "{}") or "{}")
+        meta.update({
             "annotations": sources.get("annotations", [])[:10],
             "ddg_results": sources.get("web", [])[:10],
             "web_articles": sources.get("web_articles", [])[:5],
             "topic_paragraphs": sources.get("topic_paragraphs", [])[:10],
-        }, ensure_ascii=False)
+        })
+
+        # Hard gate: refuse to write without material. Every cocobook channel
+        # has been down for weeks at a time (MCP unreachable, the kk-pc index
+        # disk unmounted, the published annotation DB a 0-byte placeholder) and
+        # the pipeline kept producing articles regardless — silent degradation
+        # is how confidently wrong content got mass-produced. An article with
+        # no evidence behind it cannot be anything but invented.
+        material_counts = {
+            "annotations": len(sources.get("annotations", []) or []),
+            "web": len(sources.get("web", []) or []),
+            "web_articles": len(sources.get("web_articles", []) or []),
+            "topic_paragraphs": len(sources.get("topic_paragraphs", []) or []),
+            "cocobook": len(sources.get("cocobook", []) or []),
+        }
+        meta["retrieval_health"] = material_counts
+        if not any(material_counts.values()):
+            self.db.update_status(task_id, "needs_material", dict(meta, **{
+                "skip_reason": "no_material: every retrieval channel returned "
+                               "nothing (see retrieval_health)",
+            }))
+            print("  [research] BLOCKED — every retrieval channel came back "
+                  "empty. Not writing an article with no evidence behind it.")
+            print(f"  [research] channels: {material_counts}")
+            return None
+
         self.db.conn.execute(
             "UPDATE tasks SET meta_json=? WHERE id=?",
-            (sources_json, task_id)
+            (json.dumps(meta, ensure_ascii=False), task_id)
         )
         self.db.conn.commit()
         self.db.update_status(task_id, "synthesizing")
@@ -195,7 +298,9 @@ class Pipeline:
             "topic_paragraphs": sources_data.get("topic_paragraphs", []),
         }
 
-        synthesis = run_synthesis(sources)
+        # keyword focuses the synthesis LLM; without it the cascade's root layer
+        # summarises the material without knowing what the article is about.
+        synthesis = run_synthesis(sources, keyword=task["keyword"])
 
         if not synthesis or not synthesis.core_judgment:
             print(f"  [synthesis] SKIPPED: No core judgment formed")
@@ -227,22 +332,15 @@ class Pipeline:
         task = self.db.get_task(task_id)
         print(f"  [framework] Building structure...")
 
-        # Load synthesis output
-        synthesis_json = task.get("synthesis", "{}")
+        # Load synthesis output through the typed contract.
+        # Hand-rolling `SynthesisOutput(core_judgment=d.get("core_judgment",""))`
+        # meant an empty/corrupt synthesis column produced a valid-looking
+        # object with no core judgment, and the cascade happily wrote an
+        # article about nothing. from_dict() raises instead.
         from article_pipeline.contracts import SynthesisOutput
         import json as _j
-        synthesis_data = _j.loads(synthesis_json)
-
-        synthesis = SynthesisOutput(
-            core_judgment=synthesis_data.get("core_judgment", ""),
-            evidence_for=synthesis_data.get("evidence_for", []),
-            evidence_against=synthesis_data.get("evidence_against", []),
-            conflicts=synthesis_data.get("conflicts", []),
-            unique_claims=synthesis_data.get("unique_claims", []),
-            differentiation=synthesis_data.get("differentiation", ""),
-            confidence=synthesis_data.get("confidence", 0.0),
-            freeform_note=synthesis_data.get("freeform_note", ""),
-        )
+        synthesis_data = _j.loads(task.get("synthesis") or "{}")
+        synthesis = SynthesisOutput.from_dict(synthesis_data)
 
         # Get genre from category (simplified mapping)
         genre = self._map_category_to_genre(task["category"])
@@ -327,25 +425,11 @@ class Pipeline:
         framework_data = _j.loads(task.get("framework", "{}"))
         prosody_data = _j.loads(task.get("prosody", "{}"))
 
-        # Reconstruct data objects
+        # Reconstruct data objects through the typed contracts (see
+        # process_framework for why the hand-rolled .get() version was unsafe).
         from article_pipeline.contracts import FrameworkOutput, ProsodyOutput, StyleOutput
-        framework = FrameworkOutput(
-            method=framework_data.get("method", ""),
-            structure=framework_data.get("structure", []),
-            takeaway=framework_data.get("takeaway", ""),
-            reader_entry_state=framework_data.get("reader_entry_state", ""),
-            reader_exit_state=framework_data.get("reader_exit_state", ""),
-            visual_anchors=framework_data.get("visual_anchors"),
-            freeform_note=framework_data.get("freeform_note", ""),
-        )
-
-        prosody = ProsodyOutput(
-            samples=prosody_data.get("samples", []),
-            sample_type=prosody_data.get("sample_type", ""),
-            negative_constraints=prosody_data.get("negative_constraints", ""),
-            rhythm_hint=prosody_data.get("rhythm_hint", ""),
-            freeform_note=prosody_data.get("freeform_note", ""),
-        )
+        framework = FrameworkOutput.from_dict(framework_data)
+        prosody = ProsodyOutput.from_dict(prosody_data)
 
         # Phase 4: Get style preset and generate dynamic rules
         from article_pipeline.style import get_preset, render_temperament
@@ -572,15 +656,21 @@ class Pipeline:
         outline["platform"] = task.get("platform", "")
         style_overrides = meta.get("style_overrides")
 
+        # Source-attributed evidence from the synthesis layer. Without this the
+        # writer only ever saw the truncated raw research note, where claims are
+        # detached from their sources.
+        synthesis_data = json.loads(task.get("synthesis") or "{}")
+        evidence = synthesis_data.get("evidence_for") or []
+
         if task["category"] == "book-knowledge":
             result = write_article_claude(
                 task["keyword"], task["category"], outline, research_note, tier=tier,
-                style_overrides=style_overrides
+                style_overrides=style_overrides, evidence=evidence
             )
         else:
             result = write_article(
                 task["keyword"], task["category"], outline, research_note, tier=tier,
-                style_overrides=style_overrides
+                style_overrides=style_overrides, evidence=evidence
             )
 
         if "error" in result:
@@ -659,12 +749,37 @@ class Pipeline:
         meta = json.loads(task.get("meta_json", "{}") or "{}")
         trust_tier = meta.get("trust_tier", "TIER_INTERNAL")
 
+        # The publish gate weighs three signals: material density, whether the
+        # piece has a stated differentiation, and whether it carries unique
+        # claims. All three are already on the task (synthesis column + the
+        # sources cached in meta_json by process_research) but used to be left
+        # unset here, so `has_differentiation` and `has_unique_claims` were
+        # permanently False and source_depth fell back to counting URLs in the
+        # prose. That made vd >= 6.0 the only route past the gate — against a
+        # practical ceiling of ~7.5 — i.e. the gate rejected essentially
+        # everything, including human-written published articles.
+        try:
+            synthesis_data = json.loads(task.get("synthesis") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            synthesis_data = {}
+
+        research_output = {
+            "unique_claims": synthesis_data.get("unique_claims", []),
+            "evidence_for": synthesis_data.get("evidence_for", []),
+            "annotations": meta.get("annotations", []),
+            "topic_paragraphs": meta.get("topic_paragraphs", []),
+            "web_articles": meta.get("web_articles", []),
+        }
+
         results = run_self_review(
             task["article"] or "",
             tier="A",
             research_note=task["research_note"] or "",
             trust_tier=trust_tier,
-            category=task.get("category", "")
+            category=task.get("category", ""),
+            ddg_results=meta.get("ddg_results", []),
+            research_output=research_output,
+            differentiation=synthesis_data.get("differentiation", ""),
         )
 
         self.db.add_review_entry(task_id, results,
@@ -742,14 +857,31 @@ class Pipeline:
             print(f"  article-pipeline publish {task['id']}   # approve and publish")
             print(f"  article-pipeline skip {task['id']} --reason '...'  # reject")
 
-    def publish(self, task_id: int):
+    def _gate_verdict(self, task_id: int) -> dict | None:
+        """Latest publish_gate verdict for a task, or None if never reviewed."""
+        try:
+            history = self.db.get_review_history(task_id)
+        except Exception:
+            return None
+        for entry in reversed(history or []):
+            results = entry.get("check_results")
+            if isinstance(results, str):
+                try:
+                    results = json.loads(results)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if isinstance(results, dict) and results.get("publish_gate"):
+                return results["publish_gate"]
+        return None
+
+    def publish(self, task_id: int, dry_run: bool = False, force: bool = False):
         """Publish an approved article to WordPress."""
         task = self.db.get_task(task_id)
         if not task:
             print(f"Task #{task_id} not found.")
             return
 
-        if task["status"] != "reviewing":
+        if task["status"] != "reviewing" and not dry_run:
             print(f"Task #{task_id} is not in reviewing status "
                   f"(current: {task['status']})")
             return
@@ -758,11 +890,48 @@ class Pipeline:
         article = task.get("article", "")
         meta_desc = task.get("meta_description", "")
 
+        if dry_run:
+            result = publish_to_wp(task_id, title, article, meta_desc,
+                                   task["platform"], dry_run=True)
+            print(f"DRY RUN #{task_id}: {title}")
+            print(f"  route            : {result['planned_route']}")
+            print(f"  REST endpoint    : "
+                  f"{'configured' if result['rest_endpoint_configured'] else 'MISSING'}")
+            print(f"  REST credentials : "
+                  f"{'present' if result['rest_credentials_present'] else 'MISSING (will use translate bridge)'}")
+            print(f"  category         : {result['category']}"
+                  f"{'  (adjusted from ' + str(result.get('category')) + ')' if result['category_adjusted'] else ''}")
+            print(f"  excerpt          : {result['excerpt'][:80]}")
+            print(f"  content          : {result['content_chars']} chars")
+            print(f"  blocks           : {result['block_counts']}")
+            if result.get("already_published"):
+                print(f"  WARNING: already published at {result['already_published']} "
+                      f"— publishing again creates a duplicate post")
+            print("  (nothing was sent: no HTTP request, no ssh, no post created)")
+            return
+
+        # Honour the quality gate. The review stage records a publish_gate
+        # verdict, but publish() used to check only `status == "reviewing"`,
+        # so an article the gate had marked `fail` could be published anyway —
+        # the gate was advisory in practice. `force` remains the deliberate
+        # human override, and it is logged.
+        verdict = self._gate_verdict(task_id)
+        if verdict and verdict.get("decision") == "fail":
+            reasons = "；".join(verdict.get("blocking_reasons") or []) or \
+                verdict.get("reason", "quality gate failed")
+            if not force:
+                print(f"  BLOCKED by quality gate: {reasons}")
+                print(f"  Review it, or override deliberately with "
+                      f"`ap publish {task_id} --force`.")
+                return
+            print(f"  WARNING: overriding quality gate (--force): {reasons}")
+
         print(f"Publishing #{task_id}: {title}")
-        result = publish_to_wp(task_id, title, article, meta_desc, task["platform"])
+        result = publish_to_wp(task_id, title, article, meta_desc,
+                               task["platform"], force=force)
 
         if "error" in result:
-            print(f"  FAILED: {result['error']}")
+            print(f"  FAILED: {result['error']}: {result.get('message', '')}")
             return
 
         self.db.update_status(task_id, "done",
@@ -785,6 +954,21 @@ class Pipeline:
         Returns:
             Task ID or None if rejected
         """
+        # Duplicate check FIRST — the topic filter does network searches, so
+        # running it before dedup burns time/quota on a topic we will reject.
+        if not allow_duplicate:
+            dup = self.db.find_duplicate(keyword)
+            if dup:
+                print(f"[dedup] Rejected: '{keyword}' duplicates #{dup['id']} "
+                      f"({dup['status']}) — '{dup['keyword']}'")
+                print(f"[dedup] Use --allow-duplicate to add anyway, or "
+                      f"`ap status {dup['id']}` to inspect the existing task.")
+                return None
+            near = self.db.find_duplicate(keyword, include_terminal=True)
+            if near:
+                print(f"[dedup] Note: same topic was previously "
+                      f"{near['status']} as #{near['id']}.")
+
         # Run topic filter unless explicitly skipped
         if not skip_filter:
             print(f"[filter] Checking topic value: '{keyword}' [{category}]")
@@ -851,6 +1035,21 @@ class Pipeline:
         return task_id
 
 
+def known_categories() -> list[str]:
+    """Valid categories = the genre directories that actually ship.
+
+    An unknown category is dangerous rather than merely wrong:
+    _map_category_to_genre() silently falls back to "tutorial", so a typo
+    produces a tutorial-shaped article under a bogus label. The legacy
+    bin/article-pipeline CLI hardcoded this list and drifted; derive it.
+    """
+    genres_dir = Path(__file__).parent / "genres"
+    if not genres_dir.is_dir():
+        return ["wp-tech"]
+    return sorted(d.name for d in genres_dir.iterdir()
+                  if d.is_dir() and not d.name.startswith("_"))
+
+
 def main():
     """CLI entry point for article-pipeline."""
     import sys
@@ -866,6 +1065,7 @@ def main():
     add_parser = subparsers.add_parser("add", help="Add a new article task")
     add_parser.add_argument("keyword", help="Article topic keyword")
     add_parser.add_argument("-c", "--category", default="wp-tech",
+                            choices=known_categories(),
                             help="Category (default: wp-tech)")
     add_parser.add_argument("-p", "--platform", default="wptea",
                             help="Target platform (default: wptea)")
@@ -880,10 +1080,48 @@ def main():
     run_parser = subparsers.add_parser("run", help="Process queued tasks")
     run_parser.add_argument("-l", "--limit", type=int, default=5,
                             help="Max tasks to process (default: 5)")
+    run_parser.add_argument("-c", "--category", default=None,
+                            help="Only process this category")
+    run_parser.add_argument("--max-priority", type=int, default=None,
+                            help="Only process tasks with priority <= N")
+    run_parser.add_argument("--dry-run", action="store_true",
+                            help="Show what would be processed, claim nothing")
 
-    # Resume command
-    resume_parser = subparsers.add_parser("resume", help="Resume a stuck task")
+    # Resume command ("continue" kept as an alias — README used that name)
+    resume_parser = subparsers.add_parser(
+        "resume", aliases=["continue"], help="Resume a stuck task")
     resume_parser.add_argument("task_id", type=int, help="Task ID to resume")
+
+    # Status command
+    status_parser = subparsers.add_parser(
+        "status", help="Show one task in detail (incl. failure history)")
+    status_parser.add_argument("task_id", type=int)
+
+    # Recover command
+    recover_parser = subparsers.add_parser(
+        "recover", help="Requeue tasks stalled mid-cascade")
+    recover_parser.add_argument("--max-minutes", type=int, default=30,
+                                help="Consider stalled after N minutes (default: 30)")
+    recover_parser.add_argument("--dry-run", action="store_true",
+                                help="List stalled tasks without touching them")
+    recover_parser.add_argument("--include-human-gates", action="store_true",
+                                help="Also rewind outline_review/reviewing "
+                                     "(destroys work awaiting approval)")
+
+    # Skip command
+    skip_parser = subparsers.add_parser("skip", help="Reject/park a task")
+    skip_parser.add_argument("task_id", type=int)
+    skip_parser.add_argument("--reason", required=True)
+
+    # Schedule check
+    sched_parser = subparsers.add_parser(
+        "schedule-check", help="Report queue coverage vs publish rhythm")
+    sched_parser.add_argument("--notify", action="store_true",
+                              help="Send NATS alerts (default: report only)")
+
+    # Doctor
+    subparsers.add_parser(
+        "doctor", help="Validate config + report queue health")
 
     # Approve outline command
     approve_parser = subparsers.add_parser("approve-outline", help="Approve outline for TIER_EXTERNAL task")
@@ -892,6 +1130,18 @@ def main():
     # Publish command
     publish_parser = subparsers.add_parser("publish", help="Publish an approved article")
     publish_parser.add_argument("task_id", type=int, help="Task ID to publish")
+    publish_parser.add_argument("--dry-run", action="store_true",
+                                help="Convert and show what would be submitted; no network, no post created")
+    publish_parser.add_argument("--force", action="store_true",
+                                help="Allow republishing a task that already has a published_url (creates a duplicate post)")
+
+    # Review server command (documented in README as :8765 — this is it)
+    rs_parser = subparsers.add_parser("review-server",
+                                      help="Start the web review UI (default http://127.0.0.1:8765)")
+    rs_parser.add_argument("-p", "--port", type=int, default=None,
+                           help="Port (default 8765, or $AP_REVIEW_PORT)")
+    rs_parser.add_argument("--host", default=None,
+                           help="Bind address (default 127.0.0.1, or $AP_REVIEW_HOST)")
 
     # Review queue command
     subparsers.add_parser("review-queue", help="Show articles awaiting review")
@@ -928,18 +1178,128 @@ def main():
             sys.exit(1)
 
     elif args.command == "run":
-        results = pipeline.run(limit=args.limit)
-        if results:
-            print(f"\nProcessed {len(results)} tasks")
+        if args.dry_run:
+            batch = pipeline.db.peek_next_batch(
+                limit=args.limit, category=args.category,
+                max_priority=args.max_priority)
+            if not batch:
+                print("No queued tasks found.")
+            else:
+                print(f"Would process {len(batch)} task(s) "
+                      f"(dry run, nothing claimed):")
+                for t in batch:
+                    print(f"  #{t['id']} P{t['priority']} "
+                          f"[{t['category']}] {t['keyword']}")
+        else:
+            results = pipeline.run(limit=args.limit, category=args.category,
+                                   max_priority=args.max_priority)
+            if results:
+                print(f"\nCompleted {len(results)} stage transitions")
 
-    elif args.command == "resume":
+    elif args.command in ("resume", "continue"):
         pipeline.resume(args.task_id)
+
+    elif args.command == "status":
+        task = pipeline.db.get_task(args.task_id)
+        if not task:
+            print(f"Task #{args.task_id} not found.")
+            sys.exit(1)
+        import json as _j
+        meta = _j.loads(task.get("meta_json") or "{}")
+        print(f"#{task['id']}  {task['keyword']}")
+        print(f"  status    : {task['status']}")
+        print(f"  category  : {task['category']}   platform: {task['platform']}"
+              f"   priority: {task['priority']}")
+        print(f"  created   : {task['created_at']}")
+        print(f"  changed   : {meta.get('status_changed_at', '-')}")
+        print(f"  published : {task.get('published_url') or '-'}")
+        print(f"  skip      : {task.get('skip_reason') or '-'}")
+        stages = [(f, bool(task.get(f))) for f in
+                  ("research_note", "synthesis", "framework", "prosody",
+                   "compiled_prompt", "outline", "article")]
+        print("  outputs   : " + "  ".join(
+            f"{'+' if ok else '-'}{name}" for name, ok in stages))
+        for k in ("trust_tier", "outline_retries", "writing_retries",
+                  "recovery_attempts", "failed_stage"):
+            if k in meta:
+                print(f"  {k:<10}: {meta[k]}")
+        for err in meta.get("error_log", [])[-5:]:
+            print(f"  ! {err.get('at', '?')} [{err.get('stage', '?')}] "
+                  f"{str(err.get('error', ''))[:120]}")
+
+    elif args.command == "recover":
+        if args.dry_run:
+            stuck = pipeline.db.get_stuck_tasks(
+                max_minutes=args.max_minutes,
+                include_human_gates=args.include_human_gates)
+            if not stuck:
+                print("No stalled tasks.")
+            else:
+                print(f"{len(stuck)} stalled task(s) (dry run, no changes):")
+                for t in stuck:
+                    mins = t.get("stuck_minutes")
+                    print(f"  #{t['id']:>4} {t['status']:<13} "
+                          f"idle={mins if mins is not None else '?'}min  "
+                          f"{t['keyword']}")
+        else:
+            recovered = pipeline.db.recover_stuck(
+                max_minutes=args.max_minutes,
+                include_human_gates=args.include_human_gates)
+            if not recovered:
+                print("No stalled tasks to recover.")
+            else:
+                for r in recovered:
+                    print(f"  #{r['id']} {r['was']} -> {r['rolled_back_to']} "
+                          f"(attempt {r['attempts']}): {r['keyword']}")
+
+    elif args.command == "skip":
+        task = pipeline.db.get_task(args.task_id)
+        if not task:
+            print(f"Task #{args.task_id} not found.")
+            sys.exit(1)
+        pipeline.db.update_status(args.task_id, "skipped",
+                                 {"skip_reason": args.reason})
+        print(f"Task #{args.task_id} skipped: {args.reason}")
+
+    elif args.command == "schedule-check":
+        from article_pipeline.scheduler import run_schedule_check
+        alerts = run_schedule_check(pipeline.db, auto_notify=args.notify)
+        if not alerts:
+            print("Queue coverage OK for all configured platforms.")
+
+    elif args.command == "doctor":
+        from article_pipeline.config import validate_config
+        problems = validate_config()
+        print("=== config ===")
+        if not problems:
+            print("  OK")
+        for level, msg in problems:
+            print(f"  [{level}] {msg}")
+        print("=== queue ===")
+        counts = pipeline.db.status_counts()
+        if not counts:
+            print("  empty")
+        for st, n in sorted(counts.items(), key=lambda kv: -kv[1]):
+            print(f"  {st:<14} {n}")
+        stuck = pipeline.db.get_stuck_tasks()
+        print(f"=== stalled (>30min in an automated stage): {len(stuck)} ===")
+        for t in stuck:
+            print(f"  #{t['id']} {t['status']} {t['keyword']}")
+        if any(lvl == "error" for lvl, _ in problems):
+            sys.exit(1)
 
     elif args.command == "approve-outline":
         pipeline.approve_outline(args.task_id)
 
     elif args.command == "publish":
-        pipeline.publish(args.task_id)
+        pipeline.publish(args.task_id, dry_run=args.dry_run, force=args.force)
+
+    elif args.command == "review-server":
+        from article_pipeline import review_server
+        review_server.run_server(
+            port=args.port or review_server.PORT,
+            host=args.host or review_server.HOST,
+        )
 
     elif args.command == "review-queue":
         pipeline.show_review_queue()

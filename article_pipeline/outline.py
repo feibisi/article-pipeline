@@ -56,8 +56,9 @@ METHODOLOGY_DRIVEN_PROMPT = """你是一位资深内容编辑。任务：基于�
 
 2. **段落结构**：严格遵循 methodology 结构要求
    - 每个段落的 heading 参考 structure 的 h2_title
-   - 每个段落的 points 参考 structure 的 purpose
-   - 证据引用要与 evidence_for 呼应
+   - 每个段落的 points 参考 structure 的 purpose 和展开方式
+   - 每个 point 只能基于上面列出的证据（[E*] / [A*]）或核心判断。**不要在 point 里写上面没有的数字、百分比、版本号、价格、日期、产品名、人名。**
+   - 某个段落没有证据支撑时，把它的 point 写成"需补充素材：<缺什么>"，不要用编造的细节填满
 
 3. **差异化说明**（必填）：
    基于 unique_claims 和 conflicts，说明"这篇文章比搜索第一页的结果多给读者什么"。
@@ -69,7 +70,8 @@ METHODOLOGY_DRIVEN_PROMPT = """你是一位资深内容编辑。任务：基于�
    - 标题C: 偏专业/技术感
    标题必须暗含判断，不许用"全面指南""深度解析""入门教程"等后缀。
 
-5. **素材引用清单**: 研究素材中哪些可以嵌入哪些段落
+5. **素材引用清单**（material_map）: 每条给出 section_index、evidence_id（上面的 [E*]/[A*] 编号）、source（证据里的来源原文）、usage。
+   只能引用上面真实出现过的编号和来源，不要新造来源名。没有可引用素材的段落不要出现在清单里。
 
 6. **SEO 元数据**:
    - 目标关键词（首要 + 2-3个次要）
@@ -86,7 +88,7 @@ METHODOLOGY_DRIVEN_PROMPT = """你是一位资深内容编辑。任务：基于�
   "sections": [
       {{"heading": "...", "points": ["...", "..."], "purpose": "..."}}
   ],
-  "material_map": [{{"section_index": 0, "source": "...", "usage": "..."}}],
+  "material_map": [{{"section_index": 0, "evidence_id": "E1", "source": "...", "usage": "..."}}],
   "seo": {{
     "primary_keyword": "...",
     "secondary_keywords": ["...", "..."],
@@ -108,11 +110,14 @@ def _format_framework_structure(structure: list[dict]) -> str:
         purpose = sec.get("purpose", "")
         h2 = sec.get("h2_title", "")
         word_budget = sec.get("word_budget", "")
+        pattern = sec.get("pattern", "")
 
         parts.append(f"### 段落 {i+1}: {role}")
         if h2:
             parts.append(f"H2 标题建议: {h2}")
         parts.append(f"目的: {purpose}")
+        if pattern:
+            parts.append(f"展开方式: {pattern}")
         if word_budget:
             parts.append(f"字数预算: {word_budget}")
         parts.append("")
@@ -120,17 +125,20 @@ def _format_framework_structure(structure: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _format_evidence(evidence: list[dict]) -> str:
-    """格式化证据列表."""
+def _format_evidence(evidence: list[dict], prefix: str = "E") -> str:
+    """格式化证据列表，每条带稳定编号供 material_map 引用."""
     if not evidence:
         return "（无）"
 
     parts = []
-    for e in evidence[:5]:
+    for i, e in enumerate(evidence[:5], 1):
+        if not isinstance(e, dict):
+            parts.append(f"- [{prefix}{i}] {e}")
+            continue
         source = e.get("source", "未知来源")
         claim = e.get("claim", e.get("text", ""))
         strength = e.get("strength", "")
-        parts.append(f"- {source}: {claim}")
+        parts.append(f"- [{prefix}{i}] {claim}（来源: {source}）")
         if strength:
             parts.append(f"  强度: {strength}")
 
@@ -265,6 +273,11 @@ def _try_api(prompt: str) -> dict:
          ds.get("fallback_model", "deepseek-v4-pro")),
     ]
 
+    # Outline is a structured-extraction call, not creative writing: keep it cold.
+    # Without this the request omits temperature and inherits the provider
+    # default (~1.0), which is why outlines drift away from the evidence.
+    temperature = ds.get("outline_temperature", 0.2)
+
     last_error = None
     for base_url, model in endpoints:
         if not base_url or not model:
@@ -280,6 +293,7 @@ def _try_api(prompt: str) -> dict:
                 json={
                     "model": model,
                     "max_tokens": 4096,
+                    "temperature": temperature,
                     "system": "你是一位资深内容编辑。请输出 JSON 格式的提纲。只输出 JSON，不要其他内容。",
                     "messages": [{"role": "user", "content": prompt}]
                 },
@@ -336,6 +350,20 @@ def _validate_differentiation(outline: dict) -> None:
     for phrase in empty_phrases:
         if phrase in differentiation.lower():
             raise ValueError(f"differentiation 包含空洞词汇: {differentiation}")
+
+
+def _checked(outline: dict) -> dict:
+    """Run the differentiation gate but report failure as an error dict.
+
+    Raising here escaped past pipeline's per-stage retry logic and got caught by
+    the run loop's blanket ``except Exception``, which marks the task *skipped*.
+    A rejected differentiation is a retryable generation failure, not a dead task.
+    """
+    try:
+        _validate_differentiation(outline)
+    except ValueError as e:
+        return {"error": "differentiation_rejected", "message": str(e)}
+    return outline
 
 
 def generate_outline_from_layers(
@@ -421,8 +449,7 @@ def generate_outline_from_layers(
     # 尝试生成
     result = _try_api(prompt)
     if "error" not in result:
-        _validate_differentiation(result)
-        return result
+        return _checked(result)
 
     # Fallback: Ollama
     config = load_config()
@@ -433,7 +460,7 @@ def generate_outline_from_layers(
     try:
         result = _try_ollama(prompt, ollama_url, model)
         if "error" not in result:
-            _validate_differentiation(result)
+            return _checked(result)
         return result
     except (requests.ConnectionError, requests.Timeout, requests.RequestException, json.JSONDecodeError):
         pass
@@ -496,8 +523,7 @@ def generate_outline(keyword: str, category: str, platform: str,
 
     result = _try_api(prompt)
     if "error" not in result:
-        _validate_differentiation(result)
-        return result
+        return _checked(result)
 
     ollama = config.get("ollama", {})
     ollama_url = ollama.get("base_url", "http://localhost:11434")
@@ -506,7 +532,7 @@ def generate_outline(keyword: str, category: str, platform: str,
     try:
         result = _try_ollama(prompt, ollama_url, model)
         if "error" not in result:
-            _validate_differentiation(result)
+            return _checked(result)
         return result
     except (requests.ConnectionError, requests.Timeout, requests.RequestException, json.JSONDecodeError):
         pass

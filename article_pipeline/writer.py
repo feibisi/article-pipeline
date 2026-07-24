@@ -1,12 +1,13 @@
 """Article writing via DeepSeek API（Anthropic-compatible endpoint）."""
 from article_pipeline.config import load_config
+from article_pipeline.llm import (
+    call_messages_api as llm_call_messages_api,
+    resolve_endpoints,
+)
 from article_pipeline.style import render_style_block
 import os
 import re
 from datetime import date
-import requests
-import time
-import yaml
 
 
 
@@ -88,6 +89,7 @@ WRITER_SYSTEM_PROMPT = f"""你是面向中文 WordPress 开发者的技术编辑
 - 不引用裸域名（"根据 xxx.com"）。引用文章标题或机构名称
 - 不引用网站名称作为论据（"Codeable 的指南指出""WordPress 大学介绍"）。直接陈述事实
 - 参考素材没有的，跳过不写。禁止元评论（"素材没有数据""本文无法给出量化对比"）
+- "跳过不写"是换一个有素材支撑的角度写，不是编一个数字来填。陈述客观事实（"官方尚未公布定价"）不算元评论，可以写
 
 ## 术语
 {WP_GLOSSARY}
@@ -99,6 +101,23 @@ WRITER_SYSTEM_PROMPT = f"""你是面向中文 WordPress 开发者的技术编辑
 - 禁止用非技术文学词汇（"乌托邦""殿堂""殿堂级""颠覆""重构""革命性"等夸张词）
 - 禁止攻击性口语（"闭嘴""残破""垃圾"）。犀利 ≠ 粗暴，判断力 ≠ 攻击性
 - 全文不超过3个破折号（——）。正常中文写作不会用超过两次破折号"""
+
+
+_ANTI_FABRICATION = """## 反编造纪律（本节优先级高于所有其他要求，冲突时以本节为准）
+
+以下每一条都可以被审稿人逐字核对。核对不通过就是废稿。
+
+1. **可溯源原则**：正文里每一个数字、百分比、耗时、价格、版本号、日期、市场份额、用户数量，都必须能在"参考素材"或"可引用素材"里逐字找到。找不到就删掉那句话。
+2. **标注来源**：引用素材里的数据或结论时，在同一句话里点明来源（"官方变更日志记录…""某本书里提到…"）。不写裸域名，不写"据统计""有数据显示""业内普遍认为"这类无主来源。
+3. **禁止社会证明造假**：禁止编造用户数量、下载量、增长率、客户证言、"很多开发者反馈"。素材里没有真实数字，就用可验证的事实（开源地址、免费额度、兼容的版本范围）替代。
+4. **API 与常量禁止臆测**：函数名、钩子名、常量名、配置项名、命令行参数只能来自参考素材原文。**不确定某个常量/参数是否存在，就不要写它的名字**——改写成描述性说明（"在缓存绕过规则里排除登录 cookie"）。
+5. **代码必须可运行且自洽**：只写你能从素材里逐行确认的代码。不能确认的部分不要用貌似合理的占位符糊过去。代码里的路径、文件名、选项值必须与正文说明一致。
+6. **行为与性能不做断言**：不要断言某个工具的精度、延迟、上限、调度粒度（"毫秒级""秒级""无上限"），除非素材原文写明。也不要断言某个字段/时间戳的语义（创建时间 vs 修改时间）——记不准就不写。
+7. **配置项的副作用要写清**：给出配置片段时，必须说明它关闭/绕过了什么。不能给出一个会让功能整体失效的配置却说它是优化。
+8. **缺口是合法输出**：写"官方尚未公布""该项目未给出数据"是合法且受欢迎的。少写一个段落不扣分，编一个数字整篇文章作废。
+
+自检：交稿前把全文里所有数字和专有名词过一遍，逐个回答"它在素材的哪一行"。答不出来的，删掉。
+"""
 
 
 _NEGATIVE_CONSTRAINTS = """## 硬性禁止（违反即废稿）
@@ -122,6 +141,129 @@ _NEGATIVE_CONSTRAINTS = """## 硬性禁止（违反即废稿）
 - 省略号（……）用于制造"深意"
 - 感叹号连用
 """
+
+
+def _load_prosody(category: str):
+    """Derive the PROSODY layer output for a category.
+
+    Prosody is a pure function of (style preset, genre), so the writer can derive
+    it locally and get exactly what pipeline's prosody stage stored in the DB.
+    Returns None when samples are unavailable — callers must degrade, not crash.
+    """
+    try:
+        from article_pipeline.prosody import run_prosody_for_category
+        return run_prosody_for_category(category)
+    except Exception:  # noqa: BLE001 — prosody is decoration, never fatal
+        return None
+
+
+def _render_negative_constraints(category: str, prosody=None) -> str:
+    """Merge the writer's structural bans with PROSODY's genre-aware phrase bans.
+
+    Previously the writer hardcoded its own list and prosody's
+    negative_constraints were computed, stored in the DB, and never used. The two
+    lists overlap, so prosody lines whose banned phrase already appears in the
+    writer block are dropped to avoid paying tokens for duplicates.
+    """
+    block = _NEGATIVE_CONSTRAINTS
+    if prosody is None:
+        prosody = _load_prosody(category)
+    extra = getattr(prosody, "negative_constraints", "") or ""
+    if not extra:
+        return block
+
+    kept = []
+    for line in extra.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        phrases = re.findall(r'「([^」]+)」', line)
+        if phrases and all(p in block for p in phrases):
+            continue  # already banned above
+        kept.append(line if line.startswith("-") else f"- {line}")
+
+    if not kept:
+        return block
+    return (block + f"\n禁止以下表达（{category} 品类语感规则）：\n"
+            + "\n".join(kept) + "\n")
+
+
+def _render_prosody_block(prosody, research_samples: list[dict] | None = None) -> str:
+    """Render PROSODY's real samples as the writer's 语感参考 block.
+
+    The writer used to build this block from _extract_samples(research_note),
+    i.e. cocobook annotation claims, while the curated per-genre prosody samples
+    in genres/*/prosody_samples/ were loaded and discarded. Prosody samples come
+    first now; research annotations remain as a supplement.
+    """
+    parts = []
+    samples = list(getattr(prosody, "samples", None) or [])
+    rhythm = (getattr(prosody, "rhythm_hint", "") or "").strip()
+
+    if samples:
+        parts.append("## 语感范本（人类编辑挑选的真实段落，照它的节奏写，不要照它的内容写）")
+        if rhythm:
+            parts.append(f"节奏要求：{rhythm}")
+        for i, sample in enumerate(samples[:2], 1):
+            text = sample.strip()[:600]
+            quoted = "\n".join(f"> {ln}" for ln in text.splitlines() if ln.strip())
+            parts.append(f"范本 {i}:\n{quoted}")
+        parts.append("范本只示范怎么写。范本里的事实、数字、公司名一律不得搬进文章。")
+    elif rhythm:
+        parts.append(f"## 语感要求\n{rhythm}")
+
+    claims = [s.get("claim", "") for s in (research_samples or [])[:3] if s.get("claim")]
+    if claims:
+        parts.append("## 语感参考（补充，来自素材标注）\n" + "\n".join(f"- {c}" for c in claims))
+
+    return "\n\n".join(parts) + "\n\n" if parts else ""
+
+
+def _render_sourced_material(evidence: list[dict] | None,
+                             material_map: list[dict] | None) -> str:
+    """Render source-attributed material: the traceability anchor for the writer.
+
+    Two inputs, both previously dropped on the floor:
+    - ``evidence``: synthesis' evidence_for, the only place a claim travels
+      together with its source. compile.py assembled this into "精选素材" and
+      the writer never read compile's output.
+    - ``material_map``: outline asks the model for a section→source map, and
+      _build_writer_prompt never read that key.
+    """
+    parts = []
+
+    rows = []
+    for i, e in enumerate(evidence or [], 1):
+        if isinstance(e, dict):
+            claim = (e.get("claim") or e.get("text") or "").strip()
+            source = (e.get("source") or "").strip()
+            if not claim:
+                continue
+            rows.append(f"- [E{i}] {claim}" + (f"（来源: {source}）" if source else "（来源: 未标注 — 不可引用）"))
+        elif e:
+            rows.append(f"- [E{i}] {e}（来源: 未标注 — 不可引用）")
+    if rows:
+        parts.append("## 可引用素材（带出处，正文引用时必须点明来源）\n" + "\n".join(rows[:8]))
+
+    mapped = []
+    for item in material_map or []:
+        if not isinstance(item, dict):
+            continue
+        source = (item.get("source") or "").strip()
+        usage = (item.get("usage") or "").strip()
+        if not (source or usage):
+            continue
+        idx = item.get("section_index", "?")
+        eid = (item.get("evidence_id") or "").strip()
+        label = f"[{eid}] " if eid else ""
+        mapped.append(f"- 第 {idx} 段: {label}{source} — {usage}")
+    if mapped:
+        parts.append("## 素材分配（哪段用哪条素材，按此执行）\n" + "\n".join(mapped[:10]))
+
+    if not parts:
+        return ""
+    parts.append("以上素材之外的事实性内容，只能来自下方的参考素材。两处都没有的，不写。")
+    return "\n\n".join(parts) + "\n\n"
 
 
 def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
@@ -151,7 +293,7 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
             '- 素材中未确认的数据、数字、时间、URL、地址、流程细节——直接跳过不写。不需要填满每个段落。不确定的事情说"目前未公布"比编一个具体数字好一百倍。\n'
             '- 不用"赋能""闭环""抓手""天花板""底层逻辑"等管理黑话。\n'
             '- 段落之间不用"此外""另外""与此同时"衔接，让内容自然过渡。\n'
-            '- 每个H2段落必须有至少一个具体的例子、数字、或代码片段。不能全段都是解释。这些例子和数字必须来自参考素材，不能编造。如果素材不够支撑一个完整的H2段落，宁可不写这个段落。\n'
+            '- 素材支撑得起的H2段落，要给出具体的例子、数字或代码片段，不要整段都是解释。例子和数字只能来自参考素材：素材里没有具体例子的段落，写成纯解释段落或者直接删掉这个段落，绝对不要为了"每段都有数字"而编一个数字。这条规则的优先级是：不编造 > 有具体例子。\n'
             '- 技术教程和系统架构类文章可以插入Mermaid图。产品发布和营销类文章不要插入Mermaid图——没有图比编造图更好。\n'
             '- 不要在文中引用不存在的图表。不要写"从这张图""下图展示了"等指向图表的话，除非确实插入了图。\n'
         )
@@ -167,7 +309,7 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
 ''',
         "opinion": '''## 观点写作规则（必须遵守）
 - 开头50字内亮出你的判断。不要铺垫背景，不要"随着WordPress的发展"。
-- 至少用一个对比来制造张力："X不是Y，而是Z"或"表面上看是A，实际是B"。
+- 至少用一个对比来制造张力：把普遍做法和你主张的做法并排放，各写一句，让差别自己显出来。不要用"X不是Y，而是Z""表面上看是A，实际是B"这类句式（已被硬性禁止）——直接陈述两种做法各自的后果。
 - 结论必须有明确立场。不许说"取决于具体情况"或"各有优劣"。选一边站。
 - 指出对立观点的一个具体错误，用实例说明它在哪里不成立。
 - 用短句表达判断。"全站编辑就是WordPress的未来"比"从多个维度来看，全站编辑似乎代表了WordPress发展的某种方向"强一百倍。
@@ -176,7 +318,7 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
 - 必须有一个对比框架——表格、选择维度、或决策树。不能各自介绍完就算对比。
 - 每个维度两边同时说，不要介绍完A再介绍B。
 - 给出明确建议："大多数情况下选X"。不说的，读者看完还是不知道怎么选。
-- 用具体数字说明差异("TTFB差距约200ms")，不用"更快""更好"这种空话。
+- 差异能量化就量化（形如"TTFB 差距约 N ms"），但 N 必须是参考素材里的实际数字。素材没有数字时，描述差异的机制（"每次请求多一次数据库往返"），不要凭感觉编一个数字，也不要用"更快""更好"这种空话。
 - 指出每种方案不适合的场景。没有完美的方案，不说缺点等于不诚实。
 ''',
         "listicle": '''## 清单写作规则（必须遵守）
@@ -200,12 +342,12 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
         "tool-review": '''## 工具评测写作规则（必须遵守）
 - 开头明确评测标准（功能、性能、价格、易用性、生态），不是想到哪写到哪。
 - 必须实测过。没有实测过的功能不能说"支持"，只能说"文档声称支持"。
-- 每个优缺点带具体证据（截图数据、操作耗时、兼容性问题），不用"体验很好"这种空话。
+- 每个优缺点带参考素材里的具体证据（截图描述、操作耗时、兼容性问题），不用"体验很好"这种空话。素材里没有实测耗时就不要写耗时数字——写"文档未给出性能数据"比编一个秒数诚实。
 - 给出"适合谁/不适合谁"——没有任何工具适合所有人。
 ''',
         "case-study": '''## 案例拆解写作规则（必须遵守）
-- 先给结果（加载时间从3s→0.8s，流量增长40%），再讲过程。读者先知道值不值得读。
-- 用第一人称或具体项目名。"某电商站"不如"一个日活3000的WooCommerce店铺"。
+- 先给结果，再讲过程，让读者先知道值不值得读。结果里的每个数字（耗时、增幅、成本）必须来自参考素材；素材只给了定性结果就写定性结果，不要补一个好看的数字。
+- 用第一人称或素材里出现过的具体项目名。素材没写规模的项目就写"某个 WooCommerce 店铺"，不要给它编一个日活数字。
 - 讲踩坑过程：试了什么、为什么失败、怎么想通的。成功的案例不涨经验，失败的案例才长。
 - 结尾给可复用的方法论，不只是"这次我们做了什么"。
 ''',
@@ -216,9 +358,9 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
 - 不假设读者有命令行/VPS/Git基础。如果需要，另开一节"前置准备"。
 ''',
         "trend": '''## 行业趋势写作规则（必须遵守）
-- 开头用具体数据锚定趋势（增长率、市场份额变化、采用率），不用"近年来"开头。
-- 区分事实和判断。"React份额从38%降到33%"是事实，"React正在衰落"是你的判断。
-- 至少引用两个独立数据源，标注来源和时间。数据超过两年的要说明为什么仍有参考价值。
+- 开头用参考素材里的具体数据锚定趋势（增长率、市场份额变化、采用率），不用"近年来"开头。素材没有可用数据时，用一个素材里确认的具体事件锚定，不要编一个百分比。
+- 区分事实和判断。素材里的"某框架份额从 A% 降到 B%"是事实，"它正在衰落"是你的判断。A% 和 B% 只能抄素材，不能自己算、不能自己估。
+- 引用数据源时逐条标注来源和时间，来源必须在参考素材里出现过。素材只有一个数据源就只引一个，不要为了凑"两个独立源"而虚构第二个。数据超过两年的要说明为什么仍有参考价值。
 - 趋势推演给三个方向（乐观/基准/悲观），不说"未来肯定会怎样"。
 ''',
         "resource-roundup": '''## 资源推荐写作规则（必须遵守）
@@ -230,7 +372,7 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
         "marketing": '''## 营销文案写作规则（必须遵守）
 - 开头用目标读者的痛点或渴望开头，不用产品介绍开头。读者只关心"这对我有什么用"。
 - 一个核心卖点贯穿全文，不要堆功能列表。十个功能不如一个能记住的场景。
-- 用具体数字建立信任（"已有2300+开发者使用"），没有数据用用户证言。
+- 用参考素材里的真实数字建立信任（用户数、版本号、上线时间）。**素材没有数字时不要编数字，也不要编用户证言。** 改用一个可验证的具体事实（开源地址、免费额度、支持的 WordPress 版本）建立信任。
 - 结尾有明确行动号召（CTA）：不只是"了解更多"，是"现在下载，15分钟搭好第一个项目"。
 ''',
         "product-launch": '''## 产品发布写作规则（必须遵守）
@@ -265,7 +407,7 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
         "thought-leadership": '''## 思想领导力写作规则（必须遵守）
 - 立场必须鲜明且可能得罪人。如果所有人都同意你的判断，这篇就不值得写。
 - 钩子 = 一个被普遍接受的观点 + 为什么它可能是错的（或被低估了）。
-- 支撑判断至少需要两个独立源——自己的数据、行业报告、具体案例、官方变更记录。不是一个专家说。
+- 支撑判断要用参考素材里的独立源——自己的数据、行业报告、具体案例、官方变更记录，不是一个专家说。素材只提供了一个源，就靠这一个源加上推理链站住，不要虚构第二个来源来凑数。
 - 结论不要说"我们需要更多讨论"——你的整篇文章就是你的答案。
 ''',
         "editorial": '''## 社论/评论写作规则（必须遵守）
@@ -291,19 +433,17 @@ def _genre_rules(category: str, tier: str = "TIER_INTERNAL") -> str:
 def _build_writer_prompt(keyword: str, category: str, outline: dict,
                          research_note: str, writing_samples: list[dict] | None = None,
                          tier: str = "TIER_INTERNAL",
-                         style_overrides: dict | None = None) -> str:
+                         style_overrides: dict | None = None,
+                         evidence: list[dict] | None = None,
+                         prosody=None) -> str:
     """Build the full writing prompt from outline and research."""
-    # Writing craft examples — illustrate the rules, don't replace them
-    samples_block = ""
-    if writing_samples:
-        sample_texts = []
-        for s in writing_samples[:3]:
-            claim = s.get("claim", "")
-            if claim:
-                sample_texts.append(f"- {claim}")
-        if sample_texts:
-            samples_block = ("## 语感参考（这些句子来自中文写作经典，体会节奏和判断力）\n"
-                             + "\n".join(sample_texts) + "\n\n")
+    # PROSODY layer: curated per-genre samples + rhythm + genre phrase bans
+    if prosody is None:
+        prosody = _load_prosody(category)
+    samples_block = _render_prosody_block(prosody, writing_samples)
+
+    # Source-attributed material: synthesis evidence + outline's material_map
+    material_block = _render_sourced_material(evidence, outline.get("material_map"))
 
     sections_text = ""
     for i, sec in enumerate(outline.get("sections", [])):
@@ -395,8 +535,9 @@ def _build_writer_prompt(keyword: str, category: str, outline: dict,
     else:
         style_prefix = "\n"
     return f"""{style_prefix}{_genre_rules(category, tier)}
-{_NEGATIVE_CONSTRAINTS}
-{samples_block}{anchor_block}## 文章信息
+{_ANTI_FABRICATION}
+{_render_negative_constraints(category, prosody)}
+{samples_block}{anchor_block}{material_block}## 文章信息
 - 标题: {title}
 - 关键词: {keyword}
 - 核心论点: {outline.get('core_argument', '')}
@@ -415,8 +556,14 @@ def _extract_samples(research_note: str) -> list[dict]:
     """Extract writing samples from the research note's 写作范本 section."""
     import re as _re
     samples = []
-    # Match patterns like: "1. [B级|technique] claim text"
-    pattern = _re.findall(r'\d+\.\s*\[([AB])级\|(\w+)\]\s*(.+?)(?=\n\d+\.\s*\[|$)', research_note, _re.DOTALL)
+    # Matches "1. [B级|technique] claim text" and "1. [AI_draft级|principle] ...".
+    # The quality token used to be hard-coded to [AB], but every annotation in
+    # the live corpus is graded `AI_draft`, so the section rendered as
+    # "[AI_draft级|...]" and this regex matched nothing — the annotation samples
+    # never reached the writing prompt at all. Accept any grade token and let
+    # the caller decide how much authority it carries.
+    pattern = _re.findall(r'\d+\.\s*\[([\w-]+)级\|(\w+)\]\s*(.+?)(?=\n\d+\.\s*\[|$)',
+                          research_note, _re.DOTALL)
     for quality, ctype, claim in pattern:
         samples.append({"quality": quality, "type": ctype, "claim": claim.strip()})
     return samples
@@ -430,7 +577,8 @@ def _get_api_key() -> str | None:
 
 
 def _call_with_fallback(system_prompt: str, user_prompt: str,
-                        max_tokens: int = 4096) -> dict:
+                        max_tokens: int = 4096,
+                        temperature: float | None = None) -> dict:
     """Try primary API then fallback，returns same dict shape as _call_messages_api."""
     config = load_config()
     ds = config.get("deepseek", {})
@@ -438,20 +586,11 @@ def _call_with_fallback(system_prompt: str, user_prompt: str,
     if not api_key:
         return {"error": "missing_api_key"}
 
-    temperature = ds.get("temperature")
+    if temperature is None:
+        temperature = ds.get("temperature")
 
-    endpoints = [
-        (ds.get("base_url", "https://api.z.ai/api/anthropic"),
-         ds.get("writing_model", "claude-sonnet-4-20250514")),
-        (ds.get("base_url", "https://api.z.ai/api/anthropic"),
-         ds.get("model", "glm-5.1")),
-        (ds.get("fallback_url", "https://api.deepseek.com/anthropic"),
-         ds.get("fallback_model", "deepseek-v4-pro")),
-    ]
-
-    for base_url, model in endpoints:
-        if not base_url or not model:
-            continue
+    result = {"error": "no_endpoint_configured"}
+    for base_url, model in resolve_endpoints(ds):
         result = _call_messages_api(base_url, api_key, model,
                                     system_prompt, user_prompt, max_tokens,
                                     temperature=temperature)
@@ -464,68 +603,22 @@ def _call_messages_api(base_url: str, api_key: str, model: str,
                        system_prompt: str, user_prompt: str,
                        max_tokens: int = 4096,
                        temperature: float | None = None) -> dict:
-    max_retries = 3
-    backoff = [5, 15, 45]
+    """Adapter over llm.call_messages_api that returns the writer's key shape.
 
-    for attempt in range(max_retries + 1):
-        try:
-            payload = {
-                "model": model,
-                "max_tokens": max_tokens,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": user_prompt}]
-            }
-            if temperature is not None:
-                payload["temperature"] = temperature
-            resp = requests.post(
-                f"{base_url}/v1/messages",
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=180
-            )
-            # Don't retry 4xx client errors (except 429)
-            if resp.status_code == 429:
-                if attempt < max_retries:
-                    wait = backoff[attempt]
-                    print(f"  [api] Rate limited (429), retrying in {wait}s ({attempt+1}/{max_retries})")
-                    time.sleep(wait)
-                    continue
-            elif 400 <= resp.status_code < 500:
-                return {"error": "client_error",
-                        "message": f"HTTP {resp.status_code}: {resp.text[:200]}"}
-
-            resp.raise_for_status()
-            data = resp.json()
-
-            text_parts = []
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
-            content = "\n".join(text_parts)
-
-            return {
-                "article": content,
-                "model": data.get("model", model),
-                "tokens": data.get("usage", {})
-            }
-        except (requests.ConnectionError, requests.Timeout) as e:
-            if attempt < max_retries:
-                wait = backoff[attempt]
-                print(f"  [api] {type(e).__name__}, retrying in {wait}s ({attempt+1}/{max_retries})")
-                time.sleep(wait)
-                continue
-            return {"error": "api_unreachable" if isinstance(e, requests.ConnectionError) else "api_timeout",
-                    "message": str(e)}
-        except requests.RequestException as e:
-            return {"error": "request_failed", "message": str(e)}
-        except (KeyError, IndexError, TypeError) as e:
-            return {"error": "bad_response", "message": str(e)}
-
-    return {"error": "max_retries_exceeded", "message": f"Failed after {max_retries} retries"}
+    This module used to carry a byte-for-byte copy of llm.py's retry/backoff
+    loop. One copy is enough; the only real difference was the response key.
+    """
+    result = llm_call_messages_api(base_url, api_key, model,
+                                   system_prompt, user_prompt,
+                                   max_tokens=max_tokens,
+                                   temperature=temperature)
+    if "error" in result:
+        return result
+    return {
+        "article": result.get("content", ""),
+        "model": result.get("model", model),
+        "tokens": result.get("tokens", {}),
+    }
 
 
 EDITOR_SYSTEM_PROMPT = f"""你是一位严苛的中文技术编辑。你的任务是对文章做最后润色——砍废话、强化判断、让文章有骨头。
@@ -564,10 +657,11 @@ def polish_article(article: str, keyword: str = "") -> dict:
 
 def write_article(keyword: str, category: str, outline: dict,
                   research_note: str, tier: str = "TIER_INTERNAL",
-                  style_overrides: dict | None = None) -> dict:
+                  style_overrides: dict | None = None,
+                  evidence: list[dict] | None = None) -> dict:
     samples = _extract_samples(research_note)
     prompt = _build_writer_prompt(keyword, category, outline, research_note, samples, tier=tier,
-                                    style_overrides=style_overrides)
+                                    style_overrides=style_overrides, evidence=evidence)
     result = _call_with_fallback(WRITER_SYSTEM_PROMPT, prompt,
                                  max_tokens=8192)
 
@@ -593,7 +687,8 @@ def _fix_terminology(text: str) -> str:
 
 def write_article_claude(keyword: str, category: str, outline: dict,
                          research_note: str, tier: str = "TIER_INTERNAL",
-                         style_overrides: dict | None = None) -> dict:
+                         style_overrides: dict | None = None,
+                         evidence: list[dict] | None = None) -> dict:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {"error": "missing_api_key",
@@ -601,7 +696,7 @@ def write_article_claude(keyword: str, category: str, outline: dict,
 
     samples = _extract_samples(research_note)
     prompt = _build_writer_prompt(keyword, category, outline, research_note, samples, tier=tier,
-                                    style_overrides=style_overrides)
+                                    style_overrides=style_overrides, evidence=evidence)
     return _call_messages_api("https://api.anthropic.com", api_key,
                               "claude-sonnet-4-6",
                               WRITER_SYSTEM_PROMPT, prompt, 8192)

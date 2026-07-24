@@ -17,6 +17,7 @@
   <form method="POST" action="/approve?id={{ task.id }}" style="display:inline">
     <button type="submit" class="btn btn-primary" onclick="return confirm('确认发布？')">批准发布</button>
   </form>
+  <a href="/preview?id={{ task.id }}" class="btn btn-secondary">发布预演</a>
   <a href="/revision?id={{ task.id }}" class="btn btn-warning">修订</a>
   <form method="POST" action="/reject?id={{ task.id }}" style="display:inline">
     <button type="submit" class="btn btn-danger" onclick="return confirm('拒绝 this article?')">拒绝</button>

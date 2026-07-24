@@ -101,6 +101,20 @@ def test_update_status_sets_timestamps(db):
     assert task["published_at"] is not None
 
 
+def test_update_status_writes_real_columns(db):
+    """published_url / skip_reason must land in their real columns, not only
+    in the meta_json blob (regression guard for the column/blob split bug)."""
+    tid = db.add_task("test", "wp-tech", "wptea", 1)
+    db.update_status(tid, "done", {"published_url": "https://wptea.com/x/"})
+    task = db.get_task(tid)
+    assert task["published_url"] == "https://wptea.com/x/"
+
+    tid2 = db.add_task("test2", "wp-tech", "wptea", 1)
+    db.update_status(tid2, "skipped", {"skip_reason": "low_value"})
+    task2 = db.get_task(tid2)
+    assert task2["skip_reason"] == "low_value"
+
+
 def test_get_next_batch(db):
     """get_next_batch returns queued tasks up to limit."""
     for i in range(5):

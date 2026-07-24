@@ -16,7 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from article_pipeline.db import TaskDB
 from article_pipeline.text_utils import fix_em_dashes
 
-PORT = 8765
+PORT = int(os.environ.get("AP_REVIEW_PORT", "8765"))
+# Bind to loopback by default. The server has no auth on GET at all and its POST
+# routes publish to a live site, so 0.0.0.0 exposed a one-click publish button to
+# the whole VM subnet. Set AP_REVIEW_HOST=0.0.0.0 explicitly if you really want that.
+HOST = os.environ.get("AP_REVIEW_HOST", "127.0.0.1")
 AUTH_TOKEN = os.environ.get("AP_REVIEW_TOKEN", "")  # Set this env var to enable POST auth
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "templates"
@@ -179,7 +183,21 @@ class ReviewHandler(BaseHTTPRequestHandler):
         self.wfile.write(content.encode())
 
     def _send_static(self, filepath: Path):
-        if not filepath.exists():
+        # Path traversal guard: the request path is attacker-controlled and
+        # http.server does not normalise "..", so GET /static/../../../etc/passwd
+        # used to read arbitrary files as the pipeline user.
+        try:
+            resolved = filepath.resolve()
+            if not resolved.is_relative_to(STATIC_DIR.resolve()):
+                self.send_response(403)
+                self.end_headers()
+                return
+        except (OSError, ValueError):
+            self.send_response(400)
+            self.end_headers()
+            return
+        filepath = resolved
+        if not filepath.is_file():
             self.send_response(404)
             self.end_headers()
             return
@@ -213,6 +231,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._view(int(params.get('id', [0])[0]))
         elif path == '/revision':
             self._show_revision_form(int(params.get('id', [0])[0]))
+        elif path == '/preview':
+            self._preview(int(params.get('id', [0])[0]))
         elif path.startswith('/static/'):
             fname = path[len('/static/'):]
             self._send_static(STATIC_DIR / fname)
@@ -358,6 +378,51 @@ class ReviewHandler(BaseHTTPRequestHandler):
                         article_html=article_html,
                         prev_article=prev_article)
         self._send_html(page)
+
+    # ── Publish preview (what will actually ship) ──
+
+    def _preview(self, task_id: int):
+        """Show the exact Gutenberg payload that publishing would submit.
+
+        The detail page renders the article with md_to_html() — a *different*
+        converter from the one used at publish time. Approving there means
+        approving something nobody has seen. This route runs the real publish
+        path in dry-run mode: no network, no ssh, no post created.
+        """
+        task = db.get_task(task_id)
+        if not task:
+            self._send_html(_render("result.html", title="Not Found",
+                                     message="Article not found."), 404)
+            return
+
+        from article_pipeline.publish import publish_to_wp
+        result = publish_to_wp(
+            task_id,
+            task.get('title') or task['keyword'],
+            task.get('article', ''),
+            task.get('meta_description', ''),
+            task.get('platform', 'wptea'),
+            self._guess_category(task.get('keyword', '')),
+            dry_run=True,
+        )
+
+        import html as _html
+        gutenberg = result.pop("gutenberg", "")
+        summary = json.dumps(result, ensure_ascii=False, indent=2)
+        body = (
+            f"<h2>发布预演 #{task_id}</h2>"
+            f"<p><a href='/view?id={task_id}'>← 返回文章</a></p>"
+            f"<p>未联网、未 ssh、未创建任何文章。</p>"
+            f"<h3>提交摘要</h3><pre>{_html.escape(summary)}</pre>"
+            f"<h3>渲染效果（Gutenberg 块的实际 HTML）</h3>"
+            f"<div class='gb-preview'>{gutenberg}</div>"
+            f"<h3>区块源码</h3><pre>{_html.escape(gutenberg)}</pre>"
+        )
+        self._send_html(
+            "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+            "<title>发布预演</title>"
+            "<link rel='stylesheet' href='/static/style.css'></head>"
+            f"<body><main class='container'>{body}</main></body></html>")
 
     # ── Revision form ──
 
@@ -578,10 +643,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
         return '生态系统'
 
 
-if __name__ == '__main__':
-    print(f'Review server: http://localhost:{PORT}')
-    server = HTTPServer(('0.0.0.0', PORT), ReviewHandler)
+def run_server(port: int = PORT, host: str = HOST) -> None:
+    """Start the review server (used by `article-pipeline review-server`)."""
+    print(f'Review server: http://{host}:{port}')
+    if not AUTH_TOKEN and host not in ("127.0.0.1", "localhost"):
+        print('  WARNING: bound to a non-loopback address with AP_REVIEW_TOKEN '
+              'unset — anyone who can reach this port can publish or reject.')
+    server = HTTPServer((host, port), ReviewHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+
+
+if __name__ == '__main__':
+    run_server()

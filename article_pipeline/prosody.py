@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 from article_pipeline.contracts import ProsodyOutput, StyleOutput
+from article_pipeline.framework import resolve_genre
 from article_pipeline.style import get_preset
 
 # 范本类型定义
@@ -69,11 +70,13 @@ def _get_genre_base_path() -> Path:
 
 
 def _get_prosody_dir(genre: str) -> Path:
-    """获取指定品类的 prosody_samples 目录."""
+    """获取指定品类的 prosody_samples 目录.
+
+    品类名经 resolve_genre() 归一化（"case_study" → "case-study"），未知品类
+    回退到通用品类目录，避免整条 pipeline 因一个连字符崩掉。
+    """
     base = _get_genre_base_path()
-    genre_dir = base / genre.lower().strip()
-    if not genre_dir.exists():
-        raise ValueError(f"Genre directory not found: {genre_dir}")
+    genre_dir = base / resolve_genre(genre)
     prosody_dir = genre_dir / "prosody_samples"
     if not prosody_dir.exists():
         raise ValueError(f"Prosody samples directory not found: {prosody_dir}")
@@ -122,7 +125,7 @@ def _select_sample_type(style: StyleOutput, genre: str) -> SampleType:
     3. 默认 flowing
     """
     # 1. 品类默认
-    cat_key = genre.lower().strip()
+    cat_key = resolve_genre(genre)
     if cat_key in _CATEGORY_DEFAULT_SAMPLE:
         return _CATEGORY_DEFAULT_SAMPLE[cat_key]
 
@@ -158,7 +161,7 @@ def _build_negative_constraints(genre: str) -> str:
         ],
     }
 
-    cat_key = genre.lower().strip()
+    cat_key = resolve_genre(genre)
     constraints = _COMMON_NEGATIVE_CONSTRAINTS.copy()
     if cat_key in _CATEGORY_SPECIFIC:
         constraints.extend(_CATEGORY_SPECIFIC[cat_key])
@@ -221,6 +224,33 @@ def run_prosody(style: StyleOutput, genre: str) -> ProsodyOutput:
         >>> print(prosody_out.rhythm_hint)  # "层层递进——从简单到复杂..."
     """
     return build_prosody_output(style, genre)
+
+
+def run_prosody_for_category(category: str) -> ProsodyOutput | None:
+    """从品类直接派生 ProsodyOutput，供 writer 层使用.
+
+    Prosody 是 style preset 与品类的纯函数，所以 writer 可以自行派生，
+    结果与 pipeline 的 prosody 阶段一致，不需要新增跨层参数。
+
+    返回 None 表示范本不可用（打包缺失等），调用方应降级而非崩溃。
+    """
+    try:
+        preset = get_preset(category)
+        style = StyleOutput(
+            vector={
+                "density": preset.density,
+                "warmth": preset.warmth,
+                "energy": preset.energy,
+                "register": preset.register,
+                "edge": preset.edge,
+            },
+            constraints={},
+            rendered_instructions="",
+            aesthetic_concepts=[],
+        )
+        return run_prosody(style, category)
+    except (ValueError, OSError):
+        return None
 
 
 # 独立运行入口，用于测试

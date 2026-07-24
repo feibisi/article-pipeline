@@ -61,15 +61,27 @@ fi
 # 导入 pipeline
 cd "$PROJECT_DIR"
 
+# 参数通过环境变量传给 Python，避免把 shell 变量拼进源码（注入 + 引号问题）
+export AP_BATCH_SIZE="$BATCH_SIZE"
+export AP_CATEGORY="$CATEGORY"
+export AP_MAX_PRIORITY="$PRIORITY"
+
 if [[ "$DRY_RUN" == "true" ]]; then
-    echo "=== 预览模式 ==="
+    echo "=== 预览模式（不占用任务） ==="
+    # 注意: 旧版这里调用 get_next_batch()，它会把任务状态改成 researching，
+    # 即"预览"实际上抢占了任务。peek_next_batch() 只读。
     python3 -c "
+import os
 from article_pipeline.db import TaskDB
 db = TaskDB()
-tasks = db.get_next_batch(limit=$BATCH_SIZE)
+tasks = db.peek_next_batch(
+    limit=int(os.environ['AP_BATCH_SIZE']),
+    category=os.environ.get('AP_CATEGORY') or None,
+    max_priority=int(os.environ['AP_MAX_PRIORITY']),
+)
 print(f'待处理任务: {len(tasks)}')
 for t in tasks:
-    print(f'  #{t[\"id\"]}: {t[\"keyword\"]} ({t[\"category\"]})')
+    print(f'  #{t[\"id\"]} P{t[\"priority\"]} [{t[\"category\"]}] {t[\"keyword\"]}')
 "
     exit 0
 fi
@@ -77,52 +89,43 @@ fi
 # 批量运行
 echo "=== Article Pipeline 批量生产 ==="
 echo "批次大小: $BATCH_SIZE"
-echo "优先级: $PRIORITY"
+echo "优先级上限: $PRIORITY"
 if [[ -n "$CATEGORY" ]]; then
     echo "分类: $CATEGORY"
 fi
 echo
 
+# Pipeline.run() 自己会 claim 任务并逐阶段推进。
+# 旧版先调 db.get_next_batch() 抢占一批，再对每个任务调 pipeline.run(task_id)
+# —— run() 的签名是 run(limit=5)，task_id 被当成 limit，于是又抢占了一批，
+# 造成重复 claim 且第一批任务永远无人推进。
 python3 -c "
+import os, sys
 from article_pipeline.db import TaskDB
 from article_pipeline.pipeline import Pipeline
-import json
 
 db = TaskDB()
 pipeline = Pipeline(db)
+results = pipeline.run(
+    limit=int(os.environ['AP_BATCH_SIZE']),
+    category=os.environ.get('AP_CATEGORY') or None,
+    max_priority=int(os.environ['AP_MAX_PRIORITY']),
+)
 
-# 获取待处理任务
-tasks = db.get_next_batch(limit=$BATCH_SIZE)
-print(f'待处理任务: {len(tasks)}')
+print()
+print('=== 批次结果 ===')
+print(f'阶段推进次数: {len(results)}')
+counts = db.status_counts()
+for st in sorted(counts):
+    print(f'  {st:<14} {counts[st]}')
 
-if not tasks:
-    print('没有待处理任务')
-    exit(0)
-
-results = {'success': [], 'failed': [], 'skipped': []}
-
-for task in tasks:
-    task_id = task['id']
-    keyword = task['keyword']
-    print(f'\\n=== 任务 #{task_id}: {keyword} ===')
-
-    try:
-        result = pipeline.run(task_id)
-        results['success'].append(task_id)
-        print(f'✅ 完成')
-    except Exception as e:
-        results['failed'].append((task_id, str(e)))
-        print(f'❌ 失败: {e}')
-
-print(f'\\n=== 批次结果 ===')
-print(f'成功: {len(results[\"success\"])}')
-print(f'失败: {len(results[\"failed\"])}')
-print(f'跳过: {len(results[\"skipped\"])}')
-
-if results['failed']:
-    print(f'\\n失败任务:')
-    for task_id, reason in results['failed']:
-        print(f'  #{task_id}: {reason}')
+failed = [t for t in db.list_tasks(status='skipped')]
+recent = failed[-int(os.environ['AP_BATCH_SIZE']):] if failed else []
+if recent:
+    print()
+    print('最近 skipped 任务（含失败原因）:')
+    for t in recent:
+        print(f'  #{t[\"id\"]}: {t[\"keyword\"]} — {t.get(\"skip_reason\") or \"?\"}')
 "
 
 echo

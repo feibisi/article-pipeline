@@ -40,11 +40,43 @@ class ScheduleAlert:
     alert_type: Literal["shortage", "warning", "ok"] = "shortage"
 
 
-# 默认发布节奏配置（可从配置文件读取）
-_DEFAULT_RHYTHMS: list[PublishRhythm] = [
-    PublishRhythm(platform="wpcommunity", frequency=2, priority="high"),
-    PublishRhythm(platform="meta", frequency=1, priority="normal"),
+# 默认发布节奏配置。
+# 注意: platform 必须和实际入队时用的 platform 一致，否则覆盖率永远是 0，
+# 缺口告警每次都触发（历史上 rhythms 写的是 wpcommunity/meta，而 CLI 默认
+# 入队 platform 是 wptea，于是这个调度器只会制造噪音）。
+DEFAULT_RHYTHMS: list[PublishRhythm] = [
+    PublishRhythm(platform="wptea", frequency=2, priority="high"),
 ]
+
+# 向后兼容旧名
+_DEFAULT_RHYTHMS = DEFAULT_RHYTHMS
+
+
+def load_rhythms() -> list[PublishRhythm]:
+    """从 config.yaml 的 schedule.rhythms 读取节奏，缺失时用默认值。
+
+    格式:
+        schedule:
+          rhythms:
+            - platform: wptea
+              frequency: 2
+    """
+    from article_pipeline.config import load_config
+    raw = (load_config().get("schedule") or {}).get("rhythms")
+    if not isinstance(raw, list) or not raw:
+        return list(DEFAULT_RHYTHMS)
+    rhythms = []
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("platform"):
+            continue
+        try:
+            freq = int(item.get("frequency", 1))
+        except (TypeError, ValueError):
+            continue
+        rhythms.append(PublishRhythm(
+            platform=str(item["platform"]), frequency=freq,
+            priority=str(item.get("priority", "normal"))))
+    return rhythms or list(DEFAULT_RHYTHMS)
 
 
 def get_week_start(date: datetime | None = None) -> datetime:
@@ -79,26 +111,17 @@ def check_queue_coverage(
     Returns:
         QueueStatus
     """
-    import sqlite3
-
-    # 查询 queued + researching 状态的任务数
     c = db.conn.cursor()
+    # 真正"未开工的储备"= queued。
     c.execute(
-        f"""
-        SELECT COUNT(*) FROM tasks
-        WHERE status IN ('queued', 'researching')
-        AND platform = ?
-        """,
+        "SELECT COUNT(*) FROM tasks WHERE status = 'queued' AND platform = ?",
         (platform,),
     )
     queued_count = c.fetchone()[0]
 
-    # 查询 researching 状态的任务数
+    # 在途任务单独统计：它们可能失败，不能算作本周的确定供给。
     c.execute(
-        f"""
-        SELECT COUNT(*) FROM tasks
-        WHERE status = 'researching' AND platform = ?
-        """,
+        "SELECT COUNT(*) FROM tasks WHERE status = 'researching' AND platform = ?",
         (platform,),
     )
     researching_count = c.fetchone()[0]
@@ -190,7 +213,7 @@ def run_schedule_check(
         ScheduleAlert 列表
     """
     if rhythms is None:
-        rhythms = _DEFAULT_RHYTHMS
+        rhythms = load_rhythms()
 
     week_start = get_week_start()
     alerts = []

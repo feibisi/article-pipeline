@@ -1,5 +1,7 @@
 """Research module — gather materials from cocobook, web, code, and VM peers."""
 from article_pipeline.config import load_config
+import logging
+import shlex
 import subprocess
 import json
 import re
@@ -11,6 +13,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import dataclass, field
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -42,7 +46,21 @@ CONTENT_FARMS = frozenset({
     "zhihu.com", "www.zhihu.com",
     "segmentfault.com",
     "cnblogs.com", "www.cnblogs.com",
+    # Cloud-vendor "developer communities" — same reposted-tutorial economics as
+    # CSDN, and a frequent source of stale/wrong config snippets.
+    "cloud.tencent.com", "developer.aliyun.com", "aliyun.com",
+    "huaweicloud.com", "bbs.huaweicloud.com",
+    "oschina.net", "my.oschina.net", "gitee.com",
+    # Known CSDN/StackOverflow scraper mirrors
+    "programmersought.com", "codeleading.com", "javashuo.com",
+    "cxymm.net", "codenong.com", "yisu.com", "php.cn", "www.php.cn",
+    # Portal content mills
+    "sohu.com", "163.com", "sina.com.cn", "zhuanlan.zhihu.com",
 })
+
+# At most this many results from the same host, so one site cannot supply the
+# whole evidence base for an article.
+MAX_RESULTS_PER_HOST = 2
 
 
 
@@ -76,7 +94,15 @@ TOPIC_ROUTES = {
 }
 
 def _route_topics(keyword: str) -> list[str]:
-    """Select relevant topic indexes based on keyword signals."""
+    """Select relevant topic indexes based on keyword signals.
+
+    Returns [] when no signal matches. The old behaviour defaulted to the three
+    WordPress indexes for *any* unmatched keyword, so an article about e.g.
+    systemd got WordPress documentation paragraphs injected under the heading
+    "官方文档原文段落，这是最高质量的写作参考" — topic-blind injection by
+    construction. Retrieving nothing is strictly better than retrieving
+    confidently mislabelled material.
+    """
     kw = keyword.lower()
     selected = set()
     for signal, topics in TOPIC_ROUTES.items():
@@ -84,9 +110,9 @@ def _route_topics(keyword: str) -> list[str]:
             for t in topics:
                 selected.add(t)
     if not selected:
-        # Fallback: search all 3 WP topics
-        selected = {"wordpress-developer-docs", "wordpress-theme-development", "php-manual"}
-    return list(selected)[:4]
+        logger.info("no topic index matches keyword %r — skipping topic search", keyword)
+        return []
+    return sorted(selected)[:4]
 
 # Writing craft topic — universal Chinese prose style reference (wenpai built, 2026-05-23)
 WRITING_CRAFT_TOPIC = "chinese-writing"
@@ -165,11 +191,21 @@ def _search_cocobook_mcp(query: str, limit: int = 5) -> list[dict]:
             deduped.append(item)
     deduped.sort(key=lambda x: x.get("score", 0), reverse=True)
     deduped = [r for r in deduped if _is_relevant(r, query)]
+    # min_score=1: book records carry only title+author, so a metadata-only hit
+    # is the best evidence available for them. This still drops results with zero
+    # lexical overlap, which is what the backend returns when it has nothing.
+    deduped = _filter_relevant_annotations(deduped, query, min_score=1)
     return deduped[:limit]
 
 
-def _search_cocobook_topic(topic: str, query: str, limit: int = 5) -> list[dict]:
-    """Search a cocobook topic index for original document paragraphs."""
+def _search_cocobook_topic(topic: str, query: str, limit: int = 5,
+                           relevance_gate: bool = True) -> list[dict]:
+    """Search a cocobook topic index for original document paragraphs.
+
+    relevance_gate=False is for the writing-craft channel, where paragraphs are
+    harvested as *prose style* samples and need not be topically related to the
+    article keyword.
+    """
     result = _mcp_call("cocobook_topic_search",
                        {"topic": topic, "query": query, "top_k": limit})
     if not result:
@@ -178,26 +214,61 @@ def _search_cocobook_topic(topic: str, query: str, limit: int = 5) -> list[dict]
     results = []
     for item in result.get("results", []):
         item["_source"] = f"topic:{topic}"
+        item["topic"] = topic
         item["snippet"] = item.get("text", "")[:300]
+        # Provenance: which index, which section — so a fact can be traced back
+        section = item.get("section", "")
+        item["_origin"] = f"{topic}" + (f" / {section}" if section else "")
         results.append(item)
+    # Same relevance gate as annotations: the topic backend is a BM25/vector
+    # hybrid and happily returns the least-bad paragraph for an off-topic query.
+    if relevance_gate:
+        results = _filter_relevant_annotations(results, query)
     return results[:limit]
 
 
 def _search_cocobook_ssh(query: str, limit: int = 5) -> list[dict]:
-    """Search via SSH Tantivy on kk-pc (fallback when MCP is down)."""
+    """Search via SSH Tantivy on kk-pc (fallback when MCP is down).
+
+    Hardened after 2026-07 breakage: kk-pc's WSL can no longer attach the index
+    disk, so it prints a UTF-16 Windows error to stdout. With text=True and
+    strict decoding that raised UnicodeDecodeError *inside* subprocess.run —
+    outside the except clause — which propagated up through search_cocobook()
+    and killed the whole research stage. Now: quoted argument, lenient decode,
+    catch-all, and error payloads are never passed off as research material.
+    """
     try:
+        remote_cmd = (
+            "wsl python3 /mnt/c/Users/feibisi-BH-PC/tantivy_search.py "
+            f"{shlex.quote(query)} {int(limit)}"
+        )
         result = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-             "kk-pc", f"wsl python3 /mnt/c/Users/feibisi-BH-PC/tantivy_search.py '{query}' {limit}"],
-            capture_output=True, text=True, timeout=20
+             "kk-pc", remote_cmd],
+            capture_output=True, text=True, errors="replace", timeout=20
         )
         if result.returncode != 0:
+            logger.warning("cocobook SSH fallback failed (rc=%s): %.120s",
+                           result.returncode, (result.stderr or result.stdout or "").strip())
             return []
         items = json.loads(result.stdout) if result.stdout.strip() else []
+        if not isinstance(items, list):
+            return []
+        cleaned = []
         for item in items:
+            if not isinstance(item, dict) or item.get("error"):
+                # The remote script reports failures as [{"error": ...}]; without
+                # this guard the error text entered the research note as a source.
+                logger.warning("cocobook SSH fallback returned an error payload: %.120s",
+                               str(item)[:120] if isinstance(item, dict) else item)
+                continue
             item["_source"] = "aa"
-        return items
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+            item["_origin"] = "cocobook tantivy (kk-pc)"
+            cleaned.append(item)
+        return cleaned
+    except Exception as exc:  # decode errors, timeouts, missing ssh, bad JSON
+        logger.warning("cocobook SSH fallback unavailable: %s: %s",
+                       type(exc).__name__, exc)
         return []
 
 
@@ -208,11 +279,40 @@ def search_cocobook(query: str, limit: int = 5) -> list[dict]:
 
     results = _search_cocobook_mcp(query, limit)
     if not results:
+        logger.info("cocobook MCP returned nothing for %r — trying SSH tantivy", query)
         results = _search_cocobook_ssh(query, limit)
+    if not results:
+        logger.warning("cocobook returned no material for %r (all backends down or "
+                       "no relevant hits) — the article will have no book knowledge", query)
     return results
 
 
 ANNOTATIONS_DB = "/mnt/shared-context/cocobook/cocobook-annotations.db"
+
+# The published DB above has been a 0-byte placeholder since 2026-05-21, so the
+# SQLite fallback silently returned nothing (connect() succeeds on an empty
+# file; the SELECT then raises "no such table" straight into `except
+# sqlite3.Error: return []`). The staging DB is the only populated copy today,
+# so it is used as an explicit, logged fallback rather than pretending the
+# annotation channel exists.
+ANNOTATIONS_DB_FALLBACKS = [
+    "/mnt/shared-context/cocobook/cocobook-annotations-stage.db",
+]
+
+
+def _annotation_db_paths() -> list[Path]:
+    """Candidate annotation DBs, primary first, only those that look usable."""
+    paths = []
+    for raw in [ANNOTATIONS_DB, *ANNOTATIONS_DB_FALLBACKS]:
+        p = Path(raw).expanduser()
+        try:
+            if p.exists() and p.stat().st_size > 0:
+                paths.append(p)
+            elif p.exists():
+                logger.warning("annotation DB %s is empty (0 bytes) — skipping", p)
+        except OSError:
+            continue
+    return paths
 
 # Genre → claim_type mapping for targeted annotation search
 GENRE_CLAIM_TYPES = {
@@ -252,8 +352,108 @@ def _get_embedding(text: str) -> list[float] | None:
         return None
 
 
+# Chinese function characters. A bigram made *entirely* of these carries no
+# topical information: the keyword "systemd 定时器为什么不触发" yielded the
+# bigrams 为什/什么/么不, which match essentially every Chinese sentence — that
+# is how a systemd article matched 复盘五问法 and 量子思维 annotations even with
+# a relevance gate in place.
+_CJK_STOP_CHARS = set(
+    "的了是在和与或但而就都也还很更最又再只已经过着being"
+    "这那什么怎样如何为何以及可能会要有没不个我你他她它们"
+    "时候上下前后中吗呢啊吧呀哦嗯对于关于因所以但是而且"
+    "地得把被让使从到向往其之则即且或者一二三四五六七八九十"
+)
+
+
+def _keyword_tokens(keyword: str) -> set[str]:
+    """Build match tokens from a keyword: ASCII words (>=3 chars) + CJK bigrams.
+
+    Bigrams composed only of function characters are dropped — see
+    _CJK_STOP_CHARS.
+    """
+    tokens = set(re.findall(r'[a-z0-9]{3,}', keyword.lower()))
+    cjk = re.sub(r'[^一-鿿]', '', keyword)
+    for i in range(len(cjk) - 1):
+        bigram = cjk[i:i + 2]
+        if all(c in _CJK_STOP_CHARS for c in bigram):
+            continue
+        tokens.add(bigram)
+    return tokens
+
+
+# Minimum lexical relevance a piece of material must reach to be injected.
+# A hit inside the claim/context body counts 2, a hit in book/author metadata
+# counts 1, so the default of 2 means: one real body hit, or two independent
+# metadata hits. Raise it to tighten the gate.
+RELEVANCE_MIN_SCORE = 2
+
+
+def _relevance_score(item: dict, tokens: set[str]) -> int:
+    """Score lexical overlap between an item and the keyword tokens.
+
+    Body fields (claim / context / text / snippet) are weighted above metadata
+    (book / author / title), because a keyword bigram that only appears in a
+    book title is exactly how 《Timing for Animation》 ends up cited in a
+    systemd article.
+    """
+    if not tokens:
+        return 0
+    body = " ".join(str(item.get(k, "") or "")
+                    for k in ("claim", "context", "text", "snippet", "description")).lower()
+    meta = " ".join(str(item.get(k, "") or "")
+                    for k in ("book", "book_title", "author", "title", "section")).lower()
+    score = 0
+    for t in tokens:
+        if t in body:
+            score += 2
+        elif t in meta:
+            score += 1
+    return score
+
+
+def _filter_relevant_annotations(items: list[dict], keyword: str,
+                                 min_score: int = RELEVANCE_MIN_SCORE) -> list[dict]:
+    """Keep only material with real lexical overlap with the keyword.
+
+    A conservative guard against topic-blind injection — e.g. CPU-architecture
+    claims landing in a systemd article, which is how the pipeline produced
+    confident nonsense like "毫秒级调度". Results are returned best-first so
+    downstream truncation keeps the most relevant material; ties preserve input
+    order, so the function is deterministic.
+
+    This is still only a lexical gate. Real semantic relevance needs a judge
+    (LLM or embedding) and is out of scope here.
+    """
+    tokens = _keyword_tokens(keyword)
+    if not tokens:
+        return items
+    # A latin technical token ("systemd", "nginx") is the strongest signal a
+    # keyword can carry. When one is present, a lone CJK bigram collision is not
+    # enough — "触发情绪" must not qualify as material about "systemd 定时器不触发".
+    latin = {t for t in tokens if re.fullmatch(r'[a-z0-9]+', t)}
+    scored = []
+    for i, it in enumerate(items):
+        score = _relevance_score(it, tokens)
+        if latin and score < min_score + 2 and not _relevance_score(it, latin):
+            logger.debug("dropped material with no technical-term hit: %.60s",
+                         it.get("claim") or it.get("title") or "")
+            continue
+        if score >= min_score:
+            it["_relevance"] = score
+            scored.append((-score, i, it))
+        else:
+            logger.debug("dropped off-topic material (score=%d): %.60s",
+                         score, it.get("claim") or it.get("title") or "")
+    scored.sort(key=lambda x: (x[0], x[1]))
+    return [it for _, _, it in scored]
+
+
 def _search_annotations(keyword: str, category: str, limit: int = 6) -> list[dict]:
-    """Search cocobook annotations via LanceDB vector search. Falls back to SQLite."""
+    """Search cocobook annotations: MCP hybrid recommender, then local SQLite.
+
+    (There is no LanceDB code path despite the old docstring — ANNOTATIONS_LANCE
+    and _get_embedding are unused leftovers.)
+    """
     genre_types = GENRE_CLAIM_TYPES.get(category, ["technique", "principle"])
     # Always include principle/technique as fallback (80% of annotations)
     claim_types = list(set(genre_types) | {"principle", "technique"})
@@ -273,67 +473,136 @@ def _search_annotations(keyword: str, category: str, limit: int = 6) -> list[dic
                         "book": item.get("book_title", item.get("book", "")),
                         "author": item.get("author", ""),
                         "type": ct,
+                        "quality": item.get("quality", ""),
                         "claim": item.get("claim", ""),
                         "context": item.get("context", ""),
                         "_source": "annotations",
+                        "_origin": "cocobook MCP recommend",
                     })
                 if len(formatted) >= limit:
                     break
             if formatted:
-                return formatted
+                # Guard against topic-blind semantic matches (the MCP recommender
+                # conflates surface-similar topics, e.g. "timer" → animation
+                # timing). Fall through to the SQLite path if nothing is relevant.
+                relevant = _filter_relevant_annotations(formatted, keyword)
+                if relevant:
+                    return relevant
     except Exception:
         pass
 
     # Fallback: SQLite keyword search
-    db_path = Path(ANNOTATIONS_DB).expanduser()
-    if not db_path.exists():
-        return []
+    for db_path in _annotation_db_paths():
+        results = _search_annotations_sqlite(db_path, keyword, claim_types, limit)
+        if results:
+            if str(db_path) != ANNOTATIONS_DB:
+                logger.warning("annotations came from fallback DB %s — the published "
+                               "DB %s is unusable", db_path, ANNOTATIONS_DB)
+            return results
+    logger.warning("no annotations found for %r (claim_types=%s) — article will carry "
+                   "no book-sourced claims", keyword, claim_types)
+    return []
 
+
+# Quality grades, best first. Used as a deterministic tie-breaker in place of
+# the old ORDER BY RANDOM(). Every row in the current corpus is "AI_draft"
+# (1504/1504, verified_by='ai-draft'), i.e. an unverified LLM paraphrase of a
+# book — ranked below any human-graded annotation.
+_QUALITY_RANK = {"A": 0, "B": 1, "C": 2, "D": 3, "AI_draft": 5}
+
+# How a quality grade is described in the note, so the writer and the reviewer
+# both know how much weight a claim can carry.
+_QUALITY_LABELS = {
+    "AI_draft": "AI草稿标注(未经人工核验，不可作为权威依据)",
+}
+
+
+def _search_annotations_sqlite(db_path: Path, keyword: str,
+                               claim_types: list[str], limit: int) -> list[dict]:
+    """Token-based, deterministic, relevance-ranked annotation lookup.
+
+    Replaces two anti-patterns:
+      * ``ORDER BY RANDOM()`` — different material on every run, so an article
+        could never be reproduced or diffed, and relevance played no part in
+        which claims were injected.
+      * ``keyword.replace("的", "%")`` — turning the commonest Chinese particle
+        (and every space) into a SQL wildcard made ``LIKE`` match nearly the
+        whole table, which is how CPU-architecture claims reached a systemd
+        article.
+    """
+    tokens = sorted(_keyword_tokens(keyword))
+    if not tokens:
+        return []
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        kw = keyword[:30]
-        terms = "%" + kw.replace(" ", "%").replace("，", "%").replace("的", "%") + "%"
-        placeholders = ", ".join(["?"] * len(claim_types))
-        query = f"""SELECT book_title, author, claim_type, quality,
+        type_ph = ", ".join(["?"] * len(claim_types))
+        # One LIKE per token instead of one wildcard-riddled LIKE for the whole
+        # keyword. Candidate pool is deliberately wider than `limit` so ranking,
+        # not SQL order, decides what survives.
+        like_ph = " OR ".join(["claim LIKE ?" for _ in tokens]
+                              + ["context LIKE ?" for _ in tokens]
+                              + ["book_title LIKE ?" for _ in tokens])
+        like_args = [f"%{t}%" for t in tokens] * 3
+        query = f"""SELECT id, book_title, author, claim_type, quality,
                            substr(claim, 1, 300) as claim_text,
                            substr(context, 1, 200) as context_text
                     FROM annotations
-                    WHERE claim_type IN ({placeholders})
-                      AND (claim LIKE ? OR book_title LIKE ?)
-                    ORDER BY RANDOM()
+                    WHERE claim_type IN ({type_ph})
+                      AND ({like_ph})
+                    ORDER BY id
                     LIMIT ?"""
-        rows = conn.execute(query, (*claim_types, terms, terms, limit)).fetchall()
+        rows = conn.execute(query, (*claim_types, *like_args, max(limit * 10, 50))).fetchall()
         conn.close()
-
-        results = []
-        for r in rows:
-            results.append({
-                "book": r["book_title"] or "",
-                "author": r["author"] or "",
-                "type": r["claim_type"],
-                "claim": r["claim_text"],
-                "context": r["context_text"] or "",
-                "_source": "annotations",
-            })
-        return results
-    except sqlite3.Error:
+    except sqlite3.Error as exc:
+        logger.warning("annotation DB %s unusable: %s", db_path, exc)
         return []
 
+    results = []
+    for r in rows:
+        results.append({
+            "book": r["book_title"] or "",
+            "author": r["author"] or "",
+            "type": r["claim_type"],
+            "quality": r["quality"] or "",
+            "claim": r["claim_text"],
+            "context": r["context_text"] or "",
+            "_source": "annotations",
+            # Provenance: exact row this claim came from, so a reviewer can go
+            # back to the annotation (and from there to the book).
+            "_origin": f"{db_path.name}#{r['id']}",
+        })
 
-def extract_unique_claims(cocobook_annotations: list, ddg_results: list[dict]) -> list[str]:
+    ranked = _filter_relevant_annotations(results, keyword)
+    # Stable secondary sort: relevance first, then annotation quality grade.
+    ranked.sort(key=lambda it: (-it.get("_relevance", 0),
+                                _QUALITY_RANK.get(it.get("quality", ""), 9)))
+    return ranked[:limit]
+
+
+def extract_unique_claims(cocobook_annotations: list, ddg_results: list[dict],
+                          keyword: str = "") -> list[str]:
     """从 cocobook 标注中提取 unique claims。
 
     逻辑：
     1. cocobook_annotations 是从 cocobook MCP 返回的标注列表
     2. ddg_results 是 DDG 搜索返回的前 10 个结果的摘要/标题
     3. 对每个 annotation claim，检查是否在 ddg_results 中出现
-    4. 未出现 → 加入 unique_claims
+    4. 未出现 **且与选题相关** → 加入 unique_claims
 
-    简单实现：用 claim 关键词匹配 ddg_results，如果无重叠则认为 unique
+    关于第 4 步的 relevance 前置条件：本函数的判据是"与搜索结果重叠低"，
+    而与选题无关的 claim 恰好重叠最低 —— 于是越跑题的素材越容易被标成"独到
+    见解"。review.evaluate_publish_gate() 又允许非空 unique_claims 单独把文章
+    推过价值门槛，等于奖励跑题。因此先过一道相关性闸，再判独特性。
     """
     if not cocobook_annotations:
         return []
+
+    if keyword:
+        cocobook_annotations = _filter_relevant_annotations(
+            list(cocobook_annotations), keyword)
+        if not cocobook_annotations:
+            return []
 
     # 构建 DDG 搜索结果的文本语料库（用于关键词匹配）
     ddg_corpus = ""
@@ -414,21 +683,49 @@ def search_web(query: str, limit: int = 5) -> list[dict]:
     try:
         from ddgs import DDGS
         results = []
+        host_counts: dict[str, int] = {}
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=limit * 3):
                 url = r.get("href", "")
                 if _is_content_farm(url):
+                    logger.debug("dropped content farm result: %s", url)
                     continue
+                host = (urlparse(url).hostname or "").lower()
+                if host_counts.get(host, 0) >= MAX_RESULTS_PER_HOST:
+                    continue
+                host_counts[host] = host_counts.get(host, 0) + 1
                 results.append({
                     "title": _clean_title(r.get("title", "")),
                     "url": url,
-                    "snippet": r.get("body", "")
+                    "snippet": r.get("body", ""),
+                    # Provenance: a web search hit is the weakest class of
+                    # evidence and must be labelled as such downstream.
+                    "_source": "web",
+                    "_origin": f"DuckDuckGo «{query}» — {host}",
                 })
                 if len(results) >= limit:
                     break
+        if not results:
+            logger.warning("web search returned nothing usable for %r", query)
         return results
-    except Exception:
+    except Exception as exc:
+        logger.warning("web search failed for %r: %s: %s", query, type(exc).__name__, exc)
         return []
+
+
+def _resolve_encoding(resp) -> str | None:
+    """Pick a sane encoding for a fetched page.
+
+    requests falls back to ISO-8859-1 when a text/html response carries no
+    charset parameter, which turns GB18030/UTF-8 Chinese pages into mojibake —
+    and that mojibake was going straight into the research note as "可直接引用
+    具体段落". Prefer the declared charset, else chardet's guess.
+    """
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if "charset=" in ctype:
+        return resp.encoding
+    guess = getattr(resp, "apparent_encoding", None)
+    return guess or resp.encoding
 
 
 def _fetch_article_text(url: str, max_chars: int = 3000, timeout: int = 15) -> str:
@@ -440,6 +737,7 @@ def _fetch_article_text(url: str, max_chars: int = 3000, timeout: int = 15) -> s
             timeout=timeout,
         )
         resp.raise_for_status()
+        resp.encoding = _resolve_encoding(resp)
         html = resp.text
 
         # Strip scripts, styles, nav, header, footer
@@ -607,7 +905,11 @@ def _extract_data_points(sources: dict) -> list[str]:
 
         if source == "annotations" and claim:
             type_tag = f"[{claim_type}]" if claim_type else ""
-            points.append(f"洞见{type_tag}: {claim} (来源: {title})")
+            # Annotation records key the book as "book"; only MCP book records use
+            # "title". Reading "title" alone produced "(来源: )" — a data point
+            # with no attributable source, i.e. an invitation to fabricate.
+            src_label = _provenance(item) or "未标注来源"
+            points.append(f"洞见{type_tag}: {claim} (来源: {src_label})")
         elif source == "books" and title:
             author_str = f" ({author})" if author else ""
             points.append(f"书籍: 《{title}》{author_str}")
@@ -622,10 +924,18 @@ def _extract_data_points(sources: dict) -> list[str]:
         snippet = item.get("snippet", "")
         title = item.get("title", "")
         # Sentences with numbers/percentages/dates
-        num_sentences = re.findall(r"[^。.!！?？\n]*(?:\d+[%％倍亿万千]|\d{4}年)[^。.!！?？\n]*[。.]", snippet)
+        # Trailing 。/. used to be mandatory, so numbers in DDG snippets — which
+        # are cut mid-sentence with "…" far more often than not — never became
+        # data points at all. The terminator is now optional.
+        num_sentences = re.findall(
+            r"[^。.!！?？\n]*(?:\d+\s*[%％倍亿万千]|\d{4}\s*年)[^。.!！?？\n]*", snippet)
+        url = item.get("url", "")
         for s in num_sentences[:3]:
             if len(s) > 10:
-                points.append(f"数据: {s.strip()} (来源: {title})")
+                # Keep the URL next to the number: this is a web search snippet,
+                # not an authority, and the reviewer must be able to check it.
+                cite = f"{title} {url}".strip() if url else (title or "未知来源")
+                points.append(f"数据: {s.strip()} (来源: 网络搜索 — {cite})")
 
     for item in sources.get("code", [])[:3]:
         points.append(f"代码: {item.get('file', '')}")
@@ -633,25 +943,110 @@ def _extract_data_points(sources: dict) -> list[str]:
     return points
 
 
-def build_research_note(keyword: str, sources: dict) -> str:
-    """Compile research sources into a dense, structured research note."""
-    sections = [f"## 研究笔记: {keyword}\n"]
+NOTE_CHAR_BUDGET = 8000
 
-    # Topic paragraphs first — original document text, best writing reference
+
+def _provenance(item: dict) -> str:
+    """Human-readable citation for one piece of material.
+
+    Everything the pipeline knows about where a fact came from, in one string:
+    book/title, author, quality grade, and the backend row/topic it came from.
+    NOTE: the annotation schema has no page or chapter column, so page-level
+    citation is impossible today — see the audit notes.
+    """
+    book = (item.get("book") or item.get("book_title") or item.get("title") or "").strip()
+    author = (item.get("author") or "").strip()
+    parts = []
+    if book:
+        parts.append(f"《{book[:40]}》" if not book.startswith("《") else book[:44])
+    if author:
+        parts.append(author[:24])
+    quality = (item.get("quality") or "").strip()
+    if quality:
+        parts.append(_QUALITY_LABELS.get(quality, f"{quality}级标注"))
+    origin = (item.get("_origin") or "").strip()
+    if origin:
+        parts.append(origin[:60])
+    url = (item.get("url") or "").strip()
+    if url:
+        parts.append(url[:120])
+    return " / ".join(parts)
+
+
+def _assemble_note(blocks: list[tuple[int, list[str]]],
+                   budget: int = NOTE_CHAR_BUDGET,
+                   order_by_priority: bool = True) -> str:
+    """Join blocks under a char budget, dropping the least valuable lines first.
+
+    Two problems with the old builder, both about position:
+
+    1. It concatenated everything and hard-cut the tail at 8000 chars. Style
+       samples (原文范本 / 写作范本) are emitted first and easily fill 4000+
+       chars, so the cut deleted precisely the factual tail — fetched web article
+       text, code evidence, cross-VM confirmations.
+    2. outline.py:487,521 only feeds the *first* 2000 chars (4000 for external
+       tiers) of the note to the outline prompt. With style first, the article
+       skeleton was planned without ever seeing a fact.
+
+    So blocks carry a priority (lower = more valuable): output is ordered by
+    priority, and trimming eats the tail of the lowest-priority blocks first.
+    """
+    blocks = [(prio, list(lines)) for prio, lines in blocks if lines]
+    if order_by_priority:
+        blocks.sort(key=lambda b: b[0])  # stable: ties keep insertion order
+
+    def size() -> int:
+        return sum(len(line) + 1 for _, lines in blocks for line in lines)
+
+    dropped = 0
+    # Trim from the least important blocks; a block is never reduced below its
+    # header, and once only the header is left the whole block goes.
+    while size() > budget:
+        candidates = [i for i, (_, lines) in enumerate(blocks) if len(lines) > 1]
+        if not candidates:
+            break
+        worst = max(candidates, key=lambda i: (blocks[i][0], i))
+        blocks[worst][1].pop()
+        dropped += 1
+    while size() > budget:
+        candidates = [i for i, (_, lines) in enumerate(blocks) if lines]
+        if not candidates:
+            break
+        worst = max(candidates, key=lambda i: (blocks[i][0], i))
+        blocks[worst][1].clear()
+        dropped += 1
+
+    note = "\n".join(line for _, lines in blocks for line in lines)
+    if dropped:
+        note += "\n\n[... 已截断，完整素材保留在数据库]"
+    return note
+
+
+def build_research_note(keyword: str, sources: dict) -> str:
+    """Compile research sources into a dense, structured research note.
+
+    Blocks are (priority, lines); lower priority number survives truncation
+    longer. Facts and their provenance outrank style samples.
+    """
+    blocks: list[tuple[int, list[str]]] = [(0, [f"## 研究笔记: {keyword}\n"])]
+
+    # Topic paragraphs — original document text, best writing reference
     topic_paragraphs = sources.get("topic_paragraphs", [])
     if topic_paragraphs:
-        sections.append("### 原文范本（官方文档原文段落，这是最高质量的写作参考）")
+        lines = ["### 原文范本（官方文档原文段落，这是最高质量的写作参考）"]
         for i, p in enumerate(topic_paragraphs[:8], 1):
-            topic_name = p.get("topic", p.get("_source", ""))
-            section = p.get("section", "")
             text = p.get("snippet", p.get("text", ""))[:300]
-            label = f"[{section}]" if section else ""
-            sections.append(f"{i}. {label} {text}")
+            # Label with the index + section it came from, not just the section:
+            # supplements used to be mixed in here with no way to tell them apart.
+            label = p.get("_origin") or p.get("topic") or p.get("section") or ""
+            sections_label = f"[{label}]" if label else ""
+            lines.append(f"{i}. {sections_label} {text}")
+        blocks.append((3, lines))
 
     # Writing craft paragraphs — Chinese prose style from classic writing books
     writing_craft = sources.get("writing_craft", [])
     if writing_craft:
-        sections.append("\n### 写作范本（来自中文写作经典原文段落，学习这些文字的节奏和表达方式）")
+        lines = ["\n### 写作范本（来自中文写作经典原文段落，学习这些文字的节奏和表达方式）"]
         for i, p in enumerate(writing_craft[:6], 1):
             book = p.get("title", "")
             section_title = p.get("section", "")
@@ -659,25 +1054,29 @@ def build_research_note(keyword: str, sources: dict) -> str:
             label = f"[{book}]" if book else ""
             if section_title:
                 label = f"[{book} — {section_title}]"
-            sections.append(f"{i}. {label} {text}")
+            lines.append(f"{i}. {label} {text}")
+        blocks.append((4, lines))
 
     # Writing samples — cocobook annotations as fallback style reference
     writing_samples = sources.get("writing_samples", [])
     if writing_samples:
         if not topic_paragraphs and not writing_craft:
-            sections.append("### 写作范本（人类编辑的真实文字，模仿这种写法和语感）")
+            lines = ["### 写作范本（人类编辑的真实文字，模仿这种写法和语感）"]
         else:
-            sections.append("### 标注范本（人类编辑的补充观点）")
+            lines = ["### 标注范本（人类编辑的补充观点）"]
         for i, s in enumerate(writing_samples[:5], 1):
             quality = s.get("quality", "")
             claim_type = s.get("type", "")
-            sections.append(f"{i}. [{quality}级|{claim_type}] {s.get('claim', '')}")
+            # Format is parsed by writer._extract_samples — do not change.
+            lines.append(f"{i}. [{quality}级|{claim_type}] {s.get('claim', '')}")
+        blocks.append((4, lines))
 
     data_points = _extract_data_points(sources)
     if data_points:
-        sections.append("\n### 关键素材")
+        lines = ["\n### 关键素材"]
         for pt in data_points[:15]:
-            sections.append(f"- {pt}")
+            lines.append(f"- {pt}")
+        blocks.append((1, lines))
 
     # Group cocobook results by source type
     coco_items = sources.get("cocobook", [])
@@ -686,49 +1085,60 @@ def build_research_note(keyword: str, sources: dict) -> str:
     wikidata = [i for i in coco_items if i.get("_source") == "wikidata"]
 
     if annotations:
-        sections.append(f"\n### 知识标注 ({len(annotations)}条)")
+        lines = [f"\n### 知识标注 ({len(annotations)}条)"]
         for item in annotations[:5]:
-            quality = item.get("quality", "")
             applicable = item.get("applicable_to", "")
-            sections.append(f"- [{quality}] {item.get('claim', '')[:200]}")
+            cite = _provenance(item) or "未标注来源"
+            lines.append(f"- {item.get('claim', '')[:200]}")
+            lines.append(f"  出处: {cite}")
             if applicable:
-                sections.append(f"  适用: {applicable}")
+                lines.append(f"  适用: {applicable}")
+        blocks.append((2, lines))
 
     # New annotation source — genre-matched claims from cocobook annotations DB
     new_annotations = sources.get("annotations", [])
     if new_annotations:
-        sections.append(f"\n### 相关观点（来自 {len(new_annotations)} 本书的标注）")
+        lines = [f"\n### 相关观点（来自 {len(new_annotations)} 本书的标注）"]
         for item in new_annotations[:5]:
             btype = item.get("type", "")
-            book = item.get("book", "")[:30]
-            author = item.get("author", "")
             claim = item.get("claim", "")[:200]
             context = item.get("context", "")[:100]
-            sections.append(f"- [{btype} | {book} — {author}] {claim}")
+            lines.append(f"- [{btype}] {claim}")
+            lines.append(f"  出处: {_provenance(item) or '未标注来源'}")
             if context:
-                sections.append(f"  上下文: {context}")
+                lines.append(f"  上下文: {context}")
+        blocks.append((1, lines))
 
     if books:
-        sections.append(f"\n### 书籍 ({len(books)}本)")
+        lines = [f"\n### 书籍 ({len(books)}本)"]
         for item in books[:5]:
-            sections.append(f"- **{item.get('title', '')}** — {item.get('author', '')}")
+            lines.append(f"- **{item.get('title', '')}** — {item.get('author', '')}")
+        blocks.append((3, lines))
 
     if wikidata:
-        sections.append(f"\n### Wikidata ({len(wikidata)}条)")
+        lines = [f"\n### Wikidata ({len(wikidata)}条)"]
         for item in wikidata[:3]:
-            sections.append(f"- {item.get('title', '')}: {item.get('description', '')}")
+            lines.append(f"- {item.get('title', '')}: {item.get('description', '')}")
+        blocks.append((3, lines))
 
     if sources.get("web"):
-        sections.append("\n### 网络来源（搜索结果，非权威引用。写作时引用具体内容，不要引用域名）")
+        lines = ["\n### 网络来源（搜索结果，非权威引用。写作时引用具体内容，不要引用域名）"]
         for item in sources["web"][:8]:
             title = item.get("title", "")
             snippet = item.get("snippet", "")[:200]
-            sections.append(f"- **{title}**: {snippet}")
+            url = item.get("url", "")
+            lines.append(f"- **{title}**: {snippet}")
+            if url:
+                # The URL has to be in the note: review.check_fabrication treats
+                # any URL in the article that is absent from the note as
+                # fabricated, and a reviewer needs the link to verify a number.
+                lines.append(f"  出处: {url}")
+        blocks.append((2, lines))
 
     # Deep web content — fetched article text
     web_articles = sources.get("web_articles", [])
     if web_articles:
-        sections.append(f"\n### 网络文章全文摘要（{len(web_articles)} 篇，可直接引用具体段落）")
+        lines = [f"\n### 网络文章全文摘要（{len(web_articles)} 篇，可直接引用具体段落）"]
         for item in web_articles[:5]:
             title = item.get("title", "")
             text = item.get("text", "")
@@ -736,28 +1146,28 @@ def build_research_note(keyword: str, sources: dict) -> str:
                 continue
             # Split into paragraphs, keep substantive ones (>40 chars)
             paragraphs = [p.strip() for p in text.split("。") if len(p.strip()) > 40]
-            # Take up to 8 key paragraphs
             kept = paragraphs[:8]
-            sections.append(f"\n#### {title}")
+            url = item.get("url", "")
+            lines.append(f"\n#### {title}")
+            if url:
+                lines.append(f"出处: {url}")
             for p in kept:
-                sections.append(f"- {p}。")
+                lines.append(f"- {p}。")
+        blocks.append((2, lines))
 
     if sources.get("code"):
-        sections.append("\n### 代码依据")
+        lines = ["\n### 代码依据"]
         for item in sources["code"][:5]:
-            sections.append(f"- `{item.get('file', '')}`")
+            lines.append(f"- `{item.get('file', '')}`")
+        blocks.append((1, lines))
 
     if sources.get("vm_consult"):
-        sections.append("\n### 跨 VM 确认")
+        lines = ["\n### 跨 VM 确认"]
         for item in sources["vm_consult"]:
-            sections.append(f"- **{item.get('vm', '')}**: {item.get('response', '')}")
+            lines.append(f"- **{item.get('vm', '')}**: {item.get('response', '')}")
+        blocks.append((1, lines))
 
-    note = "\n".join(sections)
-    if len(note) > 8000:
-        cutoff = note[:8000].rfind("\n")
-        note = note[:cutoff] + "\n\n[... 已截断，完整素材保留在数据库]"
-
-    return note
+    return _assemble_note(blocks)
 
 
 def gather_research(keyword: str, category: str) -> dict:
@@ -796,10 +1206,17 @@ def gather_research(keyword: str, category: str) -> dict:
     for topic in _route_topics(keyword):
         topic_results.extend(_search_cocobook_topic(topic, keyword, limit=5))
 
-    # If topic search returned sparse results, supplement from cocobook books/aa
+    # If topic search returned sparse results, supplement from cocobook books/aa.
+    # These are books/zim/wikidata hits, NOT official documentation paragraphs —
+    # they used to be appended to topic_results and then rendered under
+    # "原文范本（官方文档原文段落）", i.e. relabelled as something they are not.
+    # They now join the cocobook bucket, which is rendered honestly.
     if len(topic_results) < 4:
         supplement = _search_cocobook_mcp(keyword, limit=8 - len(topic_results))
-        topic_results.extend(supplement)
+        if supplement:
+            cocobook_results = cocobook_results + [
+                s for s in supplement if s not in cocobook_results
+            ]
 
     # Writing craft search — genre-specific queries for deeper technique matching
     genre_craft_queries = {
@@ -825,7 +1242,10 @@ def gather_research(keyword: str, category: str) -> dict:
     for cq in craft_queries:
         if len(writing_craft_results) >= 8:
             break
-        for item in _search_cocobook_topic(WRITING_CRAFT_TOPIC, cq, limit=3):
+        # relevance_gate=False: craft paragraphs are prose-style samples, they are
+        # not expected to be topically related to the article keyword.
+        for item in _search_cocobook_topic(WRITING_CRAFT_TOPIC, cq, limit=3,
+                                           relevance_gate=False):
             text_key = (item.get("text", "") or "")[:80]
             if text_key and text_key not in seen_texts:
                 seen_texts.add(text_key)
@@ -898,7 +1318,8 @@ def run_research(keyword: str, category: str = "guide") -> ResearchOutput:
     cocobook_annotations = sources.get("annotations", [])
     ddg_results = sources.get("web", [])
 
-    unique_claims = extract_unique_claims(cocobook_annotations, ddg_results)
+    unique_claims = extract_unique_claims(cocobook_annotations, ddg_results,
+                                          keyword=keyword)
 
     return ResearchOutput(
         keyword=keyword,

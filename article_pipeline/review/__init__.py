@@ -45,6 +45,12 @@ from article_pipeline.review.style_compliance import (
     check_style_compliance,
     generate_compliance_report,
 )
+from article_pipeline.review.semantic_judge import (
+    JudgeVerdict,
+    judge_article,
+    apply_judge_to_gate,
+    is_enabled as semantic_judge_enabled,
+)
 
 # Existing checks（word count，format，facts，fabrication，semantic）
 
@@ -453,12 +459,22 @@ def check_semantic_facts(article: str, threshold: float = 0.9) -> dict:
 
 def compute_overall_score(results: dict) -> float:
     """Weighted overall quality score from review results."""
-    weights = {"ai_check": 0.10, "dbs_ai": 0.15, "format": 0.05, "fabrication": 0.15,
-               "cross_reference": 0.10, "semantic_facts": 0.08,
-               "word_count": 0.05, "humanizer": 0.14, "jargon": 0.10, "style_compliance": 0.08}
+    # value_density is the ONLY anti-slop signal, so it must carry real weight
+    # in the headline score. It was previously excluded, which let fluent-but-
+    # empty content score 9+/10 while its density was 4.x.
+    # style_compliance is deliberately excluded: measured on 38 human-written
+    # published articles vs 10 machine-written rejects it separates them by
+    # 0.12 points (human mean 4.29 vs 4.17) — it is noise, and the human
+    # baseline scoring 4.3/10 on our own style checker says the checker is
+    # wrong, not the prose. It stays in the results dict as advisory output.
+    weights = {"value_density": 0.22, "fabrication": 0.14, "humanizer": 0.13,
+               "dbs_ai": 0.13, "ai_check": 0.09, "cross_reference": 0.09,
+               "jargon": 0.09, "semantic_facts": 0.06,
+               "format": 0.03, "word_count": 0.02}
     # GEO is advisory — not in weighted score
     cross_ref = results.get("cross_reference")
     scores = {
+        "value_density": results.get("value_density", {}).get("overall_score", 0),
         "ai_check": results.get("ai_check", {}).get("score", 0),
         "dbs_ai": results.get("dbs_ai", {}).get("score", 5),
         "format": 7.0 if results.get("format", {}).get("pass") else 3.0,
@@ -759,8 +775,23 @@ def run_self_review(article: str, tier: str = "A",
                     category: str = "",
                     ddg_results: list[dict] | None = None,
                     research_output: dict | None = None,
-                    differentiation: str = "") -> dict:
-    """Run all self-review checks and return consolidated results."""
+                    differentiation: str = "",
+                    enable_semantic_judge: bool | None = None,
+                    judge_call_fn=None,
+                    judge_passes: int = 1,
+                    brand_context: str = "") -> dict:
+    """Run all self-review checks and return consolidated results.
+
+    Args:
+        enable_semantic_judge: Opt in to the LLM-as-judge layer
+            (:mod:`article_pipeline.review.semantic_judge`). ``None`` (default)
+            defers to the ``AP_SEMANTIC_JUDGE`` env var, which is also off by
+            default — so the default behaviour of this function is unchanged
+            and no network call is made.
+        judge_call_fn: Injectable LLM callable, for tests.
+        judge_passes: 1 = single read, 2 = adversarial second read (min-merged).
+        brand_context: Brand/product context for the judge's brand_fit check.
+    """
     ai_check = check_ai_patterns(article)
     dbs_ai = check_dbs_ai(article)  # dbs-ai-check: 22 AI 特征检测
     word_check = check_word_count(article, tier)
@@ -883,7 +914,28 @@ def run_self_review(article: str, tier: str = "A",
         has_differentiation=has_differentiation,
         has_unique_claims=has_unique_claims,
     )
+    # Semantic judge layer — OFF by default. When enabled it can only tighten
+    # the gate (reject → fail, revise → needs_human); the one loosening path is
+    # needs_human → pass, and only on evidence the judge could prove.
+    if semantic_judge_enabled(enable_semantic_judge):
+        verdict = judge_article(
+            article,
+            material=research_note or "",
+            brand_context=brand_context,
+            passes=judge_passes,
+            call_fn=judge_call_fn,
+        )
+        results["semantic_judge"] = verdict.to_dict()
+        publish_gate = apply_judge_to_gate(publish_gate, verdict)
+
     results["publish_gate"] = publish_gate
+
+    # Wire the publish gate into the headline pass/fail. Previously publish_gate
+    # was computed but never fed back into overall_pass, so a "fail" (slop) or
+    # "needs_human" verdict did not stop a task from being marked completed.
+    # A clean auto-pass now requires the density/differentiation gate to pass too.
+    if publish_gate.get("decision") in ("fail", "needs_human"):
+        results["overall_pass"] = False
 
     return results
 
