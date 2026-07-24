@@ -556,8 +556,14 @@ def _extract_samples(research_note: str) -> list[dict]:
     """Extract writing samples from the research note's 写作范本 section."""
     import re as _re
     samples = []
-    # Match patterns like: "1. [B级|technique] claim text"
-    pattern = _re.findall(r'\d+\.\s*\[([AB])级\|(\w+)\]\s*(.+?)(?=\n\d+\.\s*\[|$)', research_note, _re.DOTALL)
+    # Matches "1. [B级|technique] claim text" and "1. [AI_draft级|principle] ...".
+    # The quality token used to be hard-coded to [AB], but every annotation in
+    # the live corpus is graded `AI_draft`, so the section rendered as
+    # "[AI_draft级|...]" and this regex matched nothing — the annotation samples
+    # never reached the writing prompt at all. Accept any grade token and let
+    # the caller decide how much authority it carries.
+    pattern = _re.findall(r'\d+\.\s*\[([\w-]+)级\|(\w+)\]\s*(.+?)(?=\n\d+\.\s*\[|$)',
+                          research_note, _re.DOTALL)
     for quality, ctype, claim in pattern:
         samples.append({"quality": quality, "type": ctype, "claim": claim.strip()})
     return samples

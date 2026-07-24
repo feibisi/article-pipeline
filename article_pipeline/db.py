@@ -27,7 +27,10 @@ def normalize_keyword(keyword: str) -> str:
 
 # ── Status vocabulary (single source of truth) ──
 # Terminal states: nothing will move them without human action.
-TERMINAL_STATES = ("done", "published", "skipped", "rejected")
+# `needs_material` is terminal on purpose: retrieval came back empty, and
+# retrying on a schedule would just burn API budget until the upstream corpus
+# or index is actually repaired. A human requeues it once material exists.
+TERMINAL_STATES = ("done", "published", "skipped", "rejected", "needs_material")
 # States where a human is deliberately holding the task — never auto-recover.
 HUMAN_GATE_STATES = ("outline_review", "reviewing")
 # States owned by an automated stage; if nothing touches them they are stuck.

@@ -462,10 +462,15 @@ def compute_overall_score(results: dict) -> float:
     # value_density is the ONLY anti-slop signal, so it must carry real weight
     # in the headline score. It was previously excluded, which let fluent-but-
     # empty content score 9+/10 while its density was 4.x.
-    weights = {"value_density": 0.20, "fabrication": 0.13, "humanizer": 0.12,
-               "dbs_ai": 0.12, "ai_check": 0.08, "cross_reference": 0.08,
-               "jargon": 0.08, "style_compliance": 0.07, "semantic_facts": 0.05,
-               "format": 0.04, "word_count": 0.03}
+    # style_compliance is deliberately excluded: measured on 38 human-written
+    # published articles vs 10 machine-written rejects it separates them by
+    # 0.12 points (human mean 4.29 vs 4.17) — it is noise, and the human
+    # baseline scoring 4.3/10 on our own style checker says the checker is
+    # wrong, not the prose. It stays in the results dict as advisory output.
+    weights = {"value_density": 0.22, "fabrication": 0.14, "humanizer": 0.13,
+               "dbs_ai": 0.13, "ai_check": 0.09, "cross_reference": 0.09,
+               "jargon": 0.09, "semantic_facts": 0.06,
+               "format": 0.03, "word_count": 0.02}
     # GEO is advisory — not in weighted score
     cross_ref = results.get("cross_reference")
     scores = {

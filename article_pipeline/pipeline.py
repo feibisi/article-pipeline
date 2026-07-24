@@ -233,16 +233,44 @@ class Pipeline:
         note = build_research_note(task["keyword"], sources)
 
         self.db.save_stage_output(task_id, "research_note", note)
-        # Save sources for synthesis layer (in meta_json)
-        sources_json = json.dumps({
+        # Merge sources into meta_json for the synthesis layer. This used to
+        # overwrite the whole blob, discarding trust_tier, retry counters and
+        # status_changed_at along with it.
+        meta = json.loads(task.get("meta_json", "{}") or "{}")
+        meta.update({
             "annotations": sources.get("annotations", [])[:10],
             "ddg_results": sources.get("web", [])[:10],
             "web_articles": sources.get("web_articles", [])[:5],
             "topic_paragraphs": sources.get("topic_paragraphs", [])[:10],
-        }, ensure_ascii=False)
+        })
+
+        # Hard gate: refuse to write without material. Every cocobook channel
+        # has been down for weeks at a time (MCP unreachable, the kk-pc index
+        # disk unmounted, the published annotation DB a 0-byte placeholder) and
+        # the pipeline kept producing articles regardless — silent degradation
+        # is how confidently wrong content got mass-produced. An article with
+        # no evidence behind it cannot be anything but invented.
+        material_counts = {
+            "annotations": len(sources.get("annotations", []) or []),
+            "web": len(sources.get("web", []) or []),
+            "web_articles": len(sources.get("web_articles", []) or []),
+            "topic_paragraphs": len(sources.get("topic_paragraphs", []) or []),
+            "cocobook": len(sources.get("cocobook", []) or []),
+        }
+        meta["retrieval_health"] = material_counts
+        if not any(material_counts.values()):
+            self.db.update_status(task_id, "needs_material", dict(meta, **{
+                "skip_reason": "no_material: every retrieval channel returned "
+                               "nothing (see retrieval_health)",
+            }))
+            print("  [research] BLOCKED — every retrieval channel came back "
+                  "empty. Not writing an article with no evidence behind it.")
+            print(f"  [research] channels: {material_counts}")
+            return None
+
         self.db.conn.execute(
             "UPDATE tasks SET meta_json=? WHERE id=?",
-            (sources_json, task_id)
+            (json.dumps(meta, ensure_ascii=False), task_id)
         )
         self.db.conn.commit()
         self.db.update_status(task_id, "synthesizing")
@@ -829,6 +857,23 @@ class Pipeline:
             print(f"  article-pipeline publish {task['id']}   # approve and publish")
             print(f"  article-pipeline skip {task['id']} --reason '...'  # reject")
 
+    def _gate_verdict(self, task_id: int) -> dict | None:
+        """Latest publish_gate verdict for a task, or None if never reviewed."""
+        try:
+            history = self.db.get_review_history(task_id)
+        except Exception:
+            return None
+        for entry in reversed(history or []):
+            results = entry.get("check_results")
+            if isinstance(results, str):
+                try:
+                    results = json.loads(results)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            if isinstance(results, dict) and results.get("publish_gate"):
+                return results["publish_gate"]
+        return None
+
     def publish(self, task_id: int, dry_run: bool = False, force: bool = False):
         """Publish an approved article to WordPress."""
         task = self.db.get_task(task_id)
@@ -864,6 +909,22 @@ class Pipeline:
                       f"— publishing again creates a duplicate post")
             print("  (nothing was sent: no HTTP request, no ssh, no post created)")
             return
+
+        # Honour the quality gate. The review stage records a publish_gate
+        # verdict, but publish() used to check only `status == "reviewing"`,
+        # so an article the gate had marked `fail` could be published anyway —
+        # the gate was advisory in practice. `force` remains the deliberate
+        # human override, and it is logged.
+        verdict = self._gate_verdict(task_id)
+        if verdict and verdict.get("decision") == "fail":
+            reasons = "；".join(verdict.get("blocking_reasons") or []) or \
+                verdict.get("reason", "quality gate failed")
+            if not force:
+                print(f"  BLOCKED by quality gate: {reasons}")
+                print(f"  Review it, or override deliberately with "
+                      f"`ap publish {task_id} --force`.")
+                return
+            print(f"  WARNING: overriding quality gate (--force): {reasons}")
 
         print(f"Publishing #{task_id}: {title}")
         result = publish_to_wp(task_id, title, article, meta_desc,

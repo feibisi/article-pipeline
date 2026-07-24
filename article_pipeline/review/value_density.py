@@ -376,12 +376,18 @@ def assess_value_density(
     counter_intuitive_score = _check_counter_intuitive(article, ddg_results)
 
     # Calculate overall (weighted average)
+    # counter_intuitive scored exactly 0.0 on all 48 texts measured (10 machine
+    # articles + 38 human published samples) — it is a dead detector that only
+    # subtracted a flat 1.5 points from everyone, which is a large part of why
+    # human-written published articles scored *below* machine slop here. Kept
+    # in the returned dimensions as advisory, but out of the weighted score
+    # until it can actually discriminate.
     weights = {
-        "unique_info": 0.20,
-        "verifiable": 0.25,
-        "source_depth": 0.20,
-        "judgment": 0.20,
-        "counter_intuitive": 0.15,
+        "unique_info": 0.22,
+        "verifiable": 0.30,
+        "source_depth": 0.24,
+        "judgment": 0.24,
+        "counter_intuitive": 0.0,
     }
 
     overall = (
