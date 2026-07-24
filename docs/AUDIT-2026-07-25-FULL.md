@@ -163,6 +163,16 @@ writer.py:234 (marketing): "用具体数字建立信任（"已有2300+开发者�
 
 ---
 
+## 三·五、端到端验证尝试的结果（2026-07-25 追加）
+
+计划做 A/B 实验（同一关键词与素材，跑审计前 vs 审计后的写作层，数编造项）以验证反编造纪律的**实际效果**。**实验被两个配置阻断，未能完成**：
+
+1. **管线没有可用的 API key。** `AP_DS_API_KEY` / `DEEPSEEK_API_KEY` / `ANTHROPIC_API_KEY` 全部未设置；`_get_api_key()` 的回退链捡到了 `ANTHROPIC_AUTH_TOKEN`（前缀 `studio-l...`，是 Claude Code 自身的 token），把它发给 `api.deepseek.com` → **HTTP 401 token expired or incorrect**。任何写作调用现在都会失败。
+2. **检索通道确认全死**：kk-pc 的 WSL 挂不上 `D:/wsldir\ext4.vhdx`（返回 UTF-16 乱码），cocobook 全后端无命中。现在会诚实输出 "all backends down — the article will have no book knowledge"（此前是静默继续写）。
+
+**这意味着**：反编造纪律的效果**仍未经实证**。全部改动只有离线单测支撑——接线正确可断言，效果不可断言。
+**与 `wptea_url` 未配置属同一类问题：这套系统从未被真正配置过，只被开发过。**
+
 ## 四、待人工决定
 
 1. **分支是否合并**（`fix/quality-gate-fatal-bugs`，未提交）
