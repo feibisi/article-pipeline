@@ -26,7 +26,29 @@ BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
-db = TaskDB()
+class _LazyDB:
+    """Defer the TaskDB connection until something actually queries it.
+
+    The module used to instantiate `TaskDB()` at import time. The default
+    database lives on an SMB share, so merely importing this module blocked on
+    network I/O — and hung outright when the share was slow or unreachable.
+    That is also why the module had no test coverage: you cannot test a module
+    whose import never returns. All 25 `db.<attr>` call sites keep working
+    unchanged.
+    """
+
+    __slots__ = ("_db",)
+
+    def __init__(self):
+        self._db = None
+
+    def __getattr__(self, name):
+        if self._db is None:
+            self._db = TaskDB()
+        return getattr(self._db, name)
+
+
+db = _LazyDB()
 
 # Jinja2 environment
 jinja_env = jinja2.Environment(
