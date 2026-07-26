@@ -422,8 +422,8 @@ class Pipeline:
 
         # Load all layer outputs
         import json as _j
-        framework_data = _j.loads(task.get("framework", "{}"))
-        prosody_data = _j.loads(task.get("prosody", "{}"))
+        framework_data = _j.loads(task.get("framework") or "{}")
+        prosody_data = _j.loads(task.get("prosody") or "{}")
 
         # Reconstruct data objects through the typed contracts (see
         # process_framework for why the hand-rolled .get() version was unsafe).
@@ -468,7 +468,7 @@ class Pipeline:
         )
 
         # Build material from synthesis
-        synthesis_data = _j.loads(task.get("synthesis", "{}"))
+        synthesis_data = _j.loads(task.get("synthesis") or "{}")
         material = {
             "evidence_for": synthesis_data.get("evidence_for", []),
             "evidence_against": synthesis_data.get("evidence_against", []),
@@ -523,9 +523,9 @@ class Pipeline:
 
         # Load all layer outputs
         import json as _j
-        synthesis_data = _j.loads(task.get("synthesis", "{}"))
-        framework_data = _j.loads(task.get("framework", "{}"))
-        prosody_data = _j.loads(task.get("prosody", "{}"))
+        synthesis_data = _j.loads(task.get("synthesis") or "{}")
+        framework_data = _j.loads(task.get("framework") or "{}")
+        prosody_data = _j.loads(task.get("prosody") or "{}")
 
         # Build style output from preset
         from article_pipeline.style import get_preset_dict, render_temperament
