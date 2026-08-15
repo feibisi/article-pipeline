@@ -259,9 +259,10 @@ def _try_api(prompt: str) -> dict:
     config = load_config()
     ds = config.get("deepseek", {})
 
+    # 不回退到 ANTHROPIC_AUTH_TOKEN(Claude Code 运行时凭据),见 llm.get_api_key。
     api_key = (os.environ.get("AP_DS_API_KEY") or
-               os.environ.get("ANTHROPIC_API_KEY") or
-               os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+               os.environ.get("DEEPSEEK_API_KEY") or
+               os.environ.get("ANTHROPIC_API_KEY"))
     if not api_key:
         return {"error": "no_api_key"}
 

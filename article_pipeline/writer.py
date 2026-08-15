@@ -570,10 +570,10 @@ def _extract_samples(research_note: str) -> list[dict]:
 
 
 def _get_api_key() -> str | None:
+    # 不回退到 ANTHROPIC_AUTH_TOKEN(Claude Code 运行时凭据),见 llm.get_api_key。
     return (os.environ.get("AP_DS_API_KEY") or
             os.environ.get("DEEPSEEK_API_KEY") or
-            os.environ.get("ANTHROPIC_API_KEY") or
-            os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+            os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def _call_with_fallback(system_prompt: str, user_prompt: str,

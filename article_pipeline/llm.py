@@ -12,10 +12,11 @@ from article_pipeline.config import load_config
 
 def get_api_key() -> str | None:
     """Get API key from environment variables."""
+    # 注意: 不回退到 ANTHROPIC_AUTH_TOKEN——那是 Claude Code 运行时自身的凭据,
+    # 误发给 deepseek 端点会 401,且有把自己 token 泄露到第三方 API 的风险。
     return (os.environ.get("AP_DS_API_KEY") or
             os.environ.get("DEEPSEEK_API_KEY") or
-            os.environ.get("ANTHROPIC_API_KEY") or
-            os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+            os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def call_messages_api(
